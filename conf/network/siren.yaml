@@ -1,0 +1,10 @@
+name: "siren"
+
+_target_: "networks.Siren"
+in_features: 2
+out_features: 3
+hidden_features: 256
+hidden_layers: 3
+outermost_linear: true
+first_omega_0: 30.0
+hidden_omega_0: 30.0

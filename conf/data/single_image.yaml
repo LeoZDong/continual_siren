@@ -1,0 +1,4 @@
+_target_: data.ImageFitting
+side_length: 256
+split: "test"
+id: "108005"

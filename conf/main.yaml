@@ -1,0 +1,13 @@
+defaults:
+  - _self_
+  - network: siren
+  - data: single_image
+  - trainer: simple_trainer
+
+experiment_tag: "default"
+root_dir: "./exp"
+hydra:
+  run:
+    dir: ${root_dir}/${experiment_tag}/${now:%Y.%m.%d}/${now:%H%M%S}
+  job:
+    chdir: true

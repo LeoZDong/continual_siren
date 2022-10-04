@@ -1,0 +1,10 @@
+_target_: "trainers.simple_trainer.SimpleTrainer"
+_recursive_: false
+
+optimizer:
+  _target_: torch.optim.Adam
+  lr: 1e-4
+
+summary_every_steps: 20
+total_steps: 1000
+cuda_if_available: True
