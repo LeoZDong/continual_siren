@@ -37,57 +37,18 @@ class SimpleTrainer:
             self.device
         )
 
-        step = 0
-        while step <= total_steps:
+        self.step = 0
+        while self.step <= total_steps:
             model_output, coords = self.siren(model_input)
             loss = ((model_output - ground_truth) ** 2).mean()
 
-            # Logging training loss
-            if step % self.cfg.trainer.summary_every_steps == 0:
-                self._tb_writer.add_scalar(
-                    tag=f"train/loss",
-                    scalar_value=loss.item(),
-                    global_step=step,
-                )
-                print(f"step={step}, train_loss={round(loss.item(), 5)}")
-
-            # Logging evaluation loss and visualization
-            if step % self.cfg.trainer.eval_every_steps == 0:
-                eval_loss, full_img_out, full_gt_img = self.eval(full_coords=True)
-                _, region_img_out, region_gt_img = self.eval(full_coords=False)
-
-                self._tb_writer.add_scalar(
-                    tag="eval/loss",
-                    scalar_value=eval_loss,
-                    global_step=step,
-                )
-
-                # Log model output image on the full coordinates
-                self._tb_writer.add_image(
-                    "full/eval_out_full", full_img_out, global_step=step
-                )
-                self._tb_writer.add_image("full/gt_full", full_gt_img, global_step=step)
-
-                # Log model output image on the current region
-                region_id = self.dataset.cur_region
-                self._tb_writer.add_image(
-                    f"region/eval_out_region{region_id}",
-                    region_img_out,
-                    global_step=step,
-                )
-                self._tb_writer.add_image(
-                    f"region/gt_region{region_id}",
-                    region_gt_img,
-                    global_step=step,
-                )
-
-                # Print eval stats
-                print(f"step={step}, eval_loss={round(eval_loss, 5)}")
+            self.maybe_log(loss)
+            self.maybe_eval_and_log()
 
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step()
-            step += 1
+            self.step += 1
 
     @torch.no_grad()
     def eval(self, full_coords: bool) -> Tuple[float, Tensor]:
@@ -139,3 +100,51 @@ class SimpleTrainer:
         self.siren.train()
 
         return eval_loss, img_out, gt_img_out
+
+    def maybe_log(self, loss: Tensor):
+        """Log training summary if appropriate."""
+        if self.step % self.cfg.trainer.summary_every_steps == 0:
+            self._tb_writer.add_scalar(
+                tag=f"train/loss",
+                scalar_value=loss.item(),
+                global_step=self.step,
+            )
+            print(f"step={self.step}, train_loss={round(loss.item(), 5)}")
+
+    def maybe_eval_and_log(self):
+        """Evaluate and log evaluation summary if appropriate."""
+        if self.step % self.cfg.trainer.eval_every_steps == 0:
+            eval_loss, full_img_out, full_gt_img = self.eval(full_coords=True)
+            _, region_img_out, region_gt_img = self.eval(full_coords=False)
+
+            self._tb_writer.add_scalar(
+                tag="eval/loss",
+                scalar_value=eval_loss,
+                global_step=self.step,
+            )
+
+            # Log model output image on the full coordinates
+            self._tb_writer.add_image(
+                "full/eval_out_full", full_img_out, global_step=self.step
+            )
+            self._tb_writer.add_image(
+                "full/gt_full", full_gt_img, global_step=self.step
+            )
+
+            # Log model output image on the current region
+            region_id = self.dataset.cur_region
+            self._tb_writer.add_image(
+                f"region/eval_out_region{region_id}",
+                region_img_out,
+                global_step=self.step,
+            )
+            self._tb_writer.add_image(
+                f"region/gt_region{region_id}",
+                region_gt_img,
+                global_step=self.step,
+            )
+
+            # TODO: Only log ground-truth for comparison once (because it stays the same)
+
+            # Print eval stats
+            print(f"step={self.step}, eval_loss={round(eval_loss, 5)}")
