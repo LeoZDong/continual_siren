@@ -133,7 +133,7 @@ class SimpleTrainer:
         """Log training summary if appropriate."""
         if self.step % self.cfg.trainer.summary_every_steps == 0:
             self._tb_writer.add_scalar(
-                tag=f"train/loss",
+                tag=f"train/loss_on_cur_region",
                 scalar_value=loss.item(),
                 global_step=self.step,
             )
@@ -146,7 +146,7 @@ class SimpleTrainer:
             _, region_img_out, region_gt_img = self.eval(full_coords=False)
 
             self._tb_writer.add_scalar(
-                tag="eval/loss",
+                tag="eval/loss_on_full_img",
                 scalar_value=eval_loss,
                 global_step=self.step,
             )
