@@ -46,9 +46,7 @@ class SimpleTrainer:
                 img_out = (
                     model_output.cpu().view(256, 256, -1).detach().permute(2, 0, 1)
                 )
-                self._tb_writer.add_image(
-                    "train", utils.rgb_float2uint(img_out), global_step=step
-                )
+                self._tb_writer.add_image("train", img_out, global_step=step)
                 print(f"step={step}, loss={round(loss.item(), 5)}")
 
             self.optimizer.zero_grad()
