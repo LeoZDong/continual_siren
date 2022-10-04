@@ -130,3 +130,6 @@ dmypy.json
 
 # Data files
 BSDS300/
+
+# Experiment results
+exp/
