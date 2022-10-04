@@ -25,6 +25,26 @@ class SimpleTrainer:
         )
         self._tb_writer = SummaryWriter(os.getcwd())
 
+        # Warnings regarding switch frequency
+        if (
+            self.dataset.num_regions * self.cfg.trainer.switch_region_every_steps
+        ) < self.cfg.trainer.total_steps:
+            print(
+                f"Warning: earlier regions will be revisited upon switching! "
+                "({self.dataset.num_regions} regions, switch every {self.cfg.trainer.switch_region_every_steps} steps, {self.cfg.trainer.total_steps} total steps.)"
+            )
+        elif (
+            self.dataset.num_regions * self.cfg.trainer.switch_region_every_steps
+        ) > self.cfg.trainer.total_steps:
+            print(
+                f"Warning: later regions will be trained for fewer or no steps!"
+                "({self.dataset.num_regions} regions, switch every {self.cfg.trainer.switch_region_every_steps} steps, {self.cfg.trainer.total_steps} total steps.)"
+            )
+        else:
+            print(
+                f"Each region will be trained the same amount of steps and will not be revisited."
+            )
+
     def train(self) -> None:
         total_steps = self.cfg.trainer.total_steps
 
@@ -39,6 +59,10 @@ class SimpleTrainer:
 
         self.step = 0
         while self.step <= total_steps:
+            model_input, ground_truth = self.maybe_switch_region(
+                model_input, ground_truth
+            )
+
             model_output, coords = self.siren(model_input)
             loss = ((model_output - ground_truth) ** 2).mean()
 
@@ -101,7 +125,31 @@ class SimpleTrainer:
 
         return eval_loss, img_out, gt_img_out
 
-    def maybe_log(self, loss: Tensor):
+    def maybe_switch_region(
+        self, model_input: Tensor, ground_truth: Tensor
+    ) -> Tuple[Tensor, Tensor]:
+        """Switch to new region for training if appropriate.
+        Args:
+            model_input, ground_truth: Current feature-label pair.
+        Returns:
+            If time to switch, return the new feature-label pair. Else, return the
+                current feature-label pair.
+        """
+        if self.step and self.step % self.cfg.trainer.switch_region_every_steps == 0:
+            new_region = (self.dataset.cur_region + 1) % self.dataset.num_regions
+            print(
+                f"step={self.step}. Switching region from {self.dataset.cur_region} to {new_region}!"
+            )
+            self.dataset.set_cur_region(new_region)
+            model_input, ground_truth = next(iter(self.dataset))
+            model_input, ground_truth = model_input.to(self.device), ground_truth.to(
+                self.device
+            )
+            return model_input, ground_truth
+        else:
+            return model_input, ground_truth
+
+    def maybe_log(self, loss: Tensor) -> None:
         """Log training summary if appropriate."""
         if self.step % self.cfg.trainer.summary_every_steps == 0:
             self._tb_writer.add_scalar(
@@ -111,7 +159,7 @@ class SimpleTrainer:
             )
             print(f"step={self.step}, train_loss={round(loss.item(), 5)}")
 
-    def maybe_eval_and_log(self):
+    def maybe_eval_and_log(self) -> None:
         """Evaluate and log evaluation summary if appropriate."""
         if self.step % self.cfg.trainer.eval_every_steps == 0:
             eval_loss, full_img_out, full_gt_img = self.eval(full_coords=True)

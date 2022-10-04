@@ -7,7 +7,7 @@ optimizer:
 
 total_steps: 1000
 cuda_if_available: True
-switch_region_every_steps: 100
+switch_region_every_steps: 250
 
 summary_every_steps: 20
 eval_every_steps: 20
