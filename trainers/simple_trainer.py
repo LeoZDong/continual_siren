@@ -5,8 +5,6 @@ from hydra.utils import instantiate
 from omegaconf import DictConfig
 from torch.utils.tensorboard import SummaryWriter
 
-import utils
-
 
 class SimpleTrainer:
     def __init__(self, cfg: DictConfig, **kwargs):
