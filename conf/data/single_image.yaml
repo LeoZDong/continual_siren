@@ -1,4 +1,5 @@
 _target_: data.ImageFitting
 side_length: 256
-split: "test"
+data_split: "test"
 id: "108005"
+divide_side_n: 2

@@ -6,5 +6,6 @@ optimizer:
   lr: 1e-4
 
 summary_every_steps: 20
+eval_every_steps: 20
 total_steps: 1000
 cuda_if_available: True
