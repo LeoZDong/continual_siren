@@ -25,26 +25,6 @@ class SimpleTrainer:
         )
         self._tb_writer = SummaryWriter(os.getcwd())
 
-        # Warnings regarding switch frequency
-        if (
-            self.dataset.num_regions * self.cfg.trainer.switch_region_every_steps
-        ) < self.cfg.trainer.total_steps:
-            print(
-                f"Warning: earlier regions will be revisited upon switching! "
-                "({self.dataset.num_regions} regions, switch every {self.cfg.trainer.switch_region_every_steps} steps, {self.cfg.trainer.total_steps} total steps.)"
-            )
-        elif (
-            self.dataset.num_regions * self.cfg.trainer.switch_region_every_steps
-        ) > self.cfg.trainer.total_steps:
-            print(
-                f"Warning: later regions will be trained for fewer or no steps!"
-                "({self.dataset.num_regions} regions, switch every {self.cfg.trainer.switch_region_every_steps} steps, {self.cfg.trainer.total_steps} total steps.)"
-            )
-        else:
-            print(
-                f"Each region will be trained the same amount of steps and will not be revisited."
-            )
-
     def train(self) -> None:
         total_steps = self.cfg.trainer.total_steps
 
