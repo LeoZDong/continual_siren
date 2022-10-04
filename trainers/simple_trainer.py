@@ -53,8 +53,8 @@ class SimpleTrainer:
 
             # Logging evaluation loss and visualization
             if step % self.cfg.trainer.eval_every_steps == 0:
-                eval_loss, full_img_out, full_ground_truth = self.eval(full_coords=True)
-                _, region_img_out, region_ground_truth = self.eval(full_coords=False)
+                eval_loss, full_img_out, full_gt_img = self.eval(full_coords=True)
+                _, region_img_out, region_gt_img = self.eval(full_coords=False)
 
                 self._tb_writer.add_scalar(
                     tag="eval/loss",
@@ -66,9 +66,7 @@ class SimpleTrainer:
                 self._tb_writer.add_image(
                     "full/eval_out_full", full_img_out, global_step=step
                 )
-                self._tb_writer.add_image(
-                    "full/gt_full", full_ground_truth, global_step=step
-                )
+                self._tb_writer.add_image("full/gt_full", full_gt_img, global_step=step)
 
                 # Log model output image on the current region
                 region_id = self.dataset.cur_region
@@ -79,7 +77,7 @@ class SimpleTrainer:
                 )
                 self._tb_writer.add_image(
                     f"region/gt_region{region_id}",
-                    region_ground_truth,
+                    region_gt_img,
                     global_step=step,
                 )
 
@@ -113,6 +111,9 @@ class SimpleTrainer:
         else:
             model_input, ground_truth = self.dataset.coords, self.dataset.pixels
 
+        model_input = model_input.to(self.device)
+        ground_truth = ground_truth.to(self.device)
+
         model_output = self.siren(model_input)[0]
         side_length = int(math.sqrt(model_output.shape[0]))
 
@@ -125,10 +126,16 @@ class SimpleTrainer:
             .detach()
             .permute(2, 0, 1)
         )
+        gt_img_out = (
+            ground_truth.cpu()
+            .view(side_length, side_length, -1)
+            .detach()
+            .permute(2, 0, 1)
+        )
 
         # Clamp image in [0, 1] for visualization
         img_out = torch.clip(img_out, 0, 1)
 
         self.siren.train()
 
-        return eval_loss, img_out, ground_truth
+        return eval_loss, img_out, gt_img_out
