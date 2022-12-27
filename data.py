@@ -6,7 +6,12 @@ import torch
 from torch import Tensor
 from torch.utils.data import Dataset
 
-bsds300_dir = f"{hydra.utils.get_original_cwd()}/BSDS300/images"
+try:
+    # Internal use by hydra (for instantiation)
+    bsds300_dir = f"{hydra.utils.get_original_cwd()}/BSDS300/images"
+except:
+    # External use by model inspector
+    bsds300_dir = "BSDS300/images"
 
 
 def get_mgrid(side_length: int, dim: int = 2) -> Tensor:
