@@ -231,10 +231,10 @@ class SimpleTrainer:
             print(f"step={self.step}, eval_loss={round(eval_loss, 5)}")
 
     def maybe_save_checkpoint(self, loss: Tensor) -> None:
-        if self.step % self.cfg.trainer.checkpoint_every_steps == 0:
+        if self.step == self.cfg.trainer.total_steps:
+            name = f"final"
+        elif self.step % self.cfg.trainer.checkpoint_every_steps == 0:
             name = f"ckpt_{self.step}"
-        elif self.step == self.cfg.trainer.total_steps:
-            name = f"final_{self.step}"
         else:
             return
 
