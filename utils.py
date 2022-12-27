@@ -1,5 +1,4 @@
 import numpy as np
-from torch import Tensor
 
 
 def rgb_float2uint(rgb: np.ndarray):
