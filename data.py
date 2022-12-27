@@ -51,7 +51,7 @@ class ImageFitting(Dataset):
         """Initialize an image fitting dataset.
         Args:
             side_length: Side length of image (i.e. number of pixels on each side).
-            data_split: Data split of the BSDS dataset.
+            data_split: Data split of the BSDS dataset (i.e. 'train' or 'test').
             id: ID of the single image to use.
             divide_side_n: Evenly divide each side into n segments. This results in n^2
                 regions to fit sequentially if using continual learning.
@@ -105,15 +105,12 @@ class ImageFitting(Dataset):
         return len(self.pixels_regions)
 
     def __len__(self):
-        # return len(self.pixels_regions)
-        return self.pixels.shape[0]
+        """Number of pixels in *full* grid."""
+        return self.full_pixels.shape[0]
 
     def __getitem__(self, idx):
-        # if idx > 0:
-        # raise IndexError
-
-        return self.coords, self.pixels
-        # return self.coords[idx], self.pixels[idx]
+        """Return pixel at any coordinate on the *full* grid."""
+        return self.full_coords[idx], self.full_pixels[idx]
 
 
 if __name__ == "__main__":

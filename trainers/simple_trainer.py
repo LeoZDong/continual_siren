@@ -9,10 +9,13 @@ from torch import Tensor
 from torch.utils import data
 from torch.utils.tensorboard import SummaryWriter
 
+from utils import mse2psnr
+
 
 class SimpleTrainer:
     def __init__(self, cfg: DictConfig, **kwargs):
         self.cfg = cfg
+        self.continual = self.cfg.trainer.continual
         self.siren = instantiate(cfg.network)
         self.dataset = instantiate(cfg.data)
         self.device = (
@@ -24,27 +27,39 @@ class SimpleTrainer:
             self.cfg.trainer.optimizer, params=self.siren.parameters()
         )
         self._tb_writer = SummaryWriter(os.getcwd())
+        self._checkpoint_dir = os.path.join(os.getcwd(), "ckpt")
+        os.mkdir(self._checkpoint_dir)
+
+        # Only used in non-continual setting: randomly sample points from the full grid
+        # Each "batch" has the same number of points as *one* region in the continual case.
+        self.dataloader = data.DataLoader(
+            self.dataset,
+            batch_size=len(self.dataset) // self.dataset.num_regions,
+            shuffle=True,
+        )
+        self.dataloader_iter = iter(self.dataloader)
 
     def train(self) -> None:
-        total_steps = self.cfg.trainer.total_steps
-
-        # Prepare data
-        dataloader = data.DataLoader(
-            self.dataset, batch_size=len(self.dataset), shuffle=False
-        )
-        model_input, ground_truth = next(iter(self.dataset))
+        # Prepare data:
+        # Only used in continual setting: return all points in the current region.
+        # Each "batch" is all points in the current region.
+        model_input, ground_truth = self.dataset.coords, self.dataset.pixels
         model_input, ground_truth = model_input.to(self.device), ground_truth.to(
             self.device
         )
 
         self.step = 0
-        while self.step <= total_steps:
-            model_input, ground_truth = self.maybe_switch_region(
+        while self.step <= self.cfg.trainer.total_steps:
+            model_input, ground_truth = self.get_next_step_data(
                 model_input, ground_truth
             )
 
             model_output, coords = self.siren(model_input)
             loss = ((model_output - ground_truth) ** 2).mean()
+
+            # l1_lambda = 0.000
+            # l1_norm = sum(torch.norm(param, p=1) for param in self.siren.parameters())
+            # loss += l1_lambda * l1_norm
 
             self.maybe_log(loss)
             self.maybe_eval_and_log()
@@ -53,6 +68,9 @@ class SimpleTrainer:
             loss.backward()
             self.optimizer.step()
             self.step += 1
+
+            # Save checkpoint
+            self.maybe_save_checkpoint(loss)
 
     @torch.no_grad()
     def eval(self, full_coords: bool) -> Tuple[float, Tensor]:
@@ -105,6 +123,25 @@ class SimpleTrainer:
 
         return eval_loss, img_out, gt_img_out
 
+    def get_next_step_data(
+        self, model_input: Tensor, ground_truth: Tensor
+    ) -> Tuple[Tensor, Tensor]:
+        """Get data for the next training step.
+        In the continual case, data for the next step does not change unless we need
+            to switch to a differen region.
+        In the non-continual case, data for the next step is the next batch of randomly
+            sampled points in the full grid.
+        """
+        if self.continual:
+            return self.maybe_switch_region(model_input, ground_truth)
+        else:
+            # Look out for stop iteration
+            try:
+                return next(self.dataloader_iter)
+            except StopIteration:
+                self.dataloader_iter = iter(self.dataloader)
+                return next(self.dataloader_iter)
+
     def maybe_switch_region(
         self, model_input: Tensor, ground_truth: Tensor
     ) -> Tuple[Tensor, Tensor]:
@@ -121,7 +158,7 @@ class SimpleTrainer:
                 f"step={self.step}. Switching region from {self.dataset.cur_region} to {new_region}!"
             )
             self.dataset.set_cur_region(new_region)
-            model_input, ground_truth = next(iter(self.dataset))
+            model_input, ground_truth = self.dataset.coords, self.dataset.pixels
             model_input, ground_truth = model_input.to(self.device), ground_truth.to(
                 self.device
             )
@@ -137,6 +174,14 @@ class SimpleTrainer:
                 scalar_value=loss.item(),
                 global_step=self.step,
             )
+
+            psnr = mse2psnr(loss.item())
+            self._tb_writer.add_scalar(
+                tag=f"train/psnr_on_cur_region",
+                scalar_value=psnr,
+                global_step=self.step,
+            )
+
             print(f"step={self.step}, train_loss={round(loss.item(), 5)}")
 
     def maybe_eval_and_log(self) -> None:
@@ -145,9 +190,17 @@ class SimpleTrainer:
             eval_loss, full_img_out, full_gt_img = self.eval(full_coords=True)
             _, region_img_out, region_gt_img = self.eval(full_coords=False)
 
+            # Log evaluation loss
             self._tb_writer.add_scalar(
                 tag="eval/loss_on_full_img",
                 scalar_value=eval_loss,
+                global_step=self.step,
+            )
+
+            psnr = mse2psnr(eval_loss)
+            self._tb_writer.add_scalar(
+                tag="eval/psnr_on_full_img",
+                scalar_value=psnr,
                 global_step=self.step,
             )
 
@@ -176,3 +229,22 @@ class SimpleTrainer:
 
             # Print eval stats
             print(f"step={self.step}, eval_loss={round(eval_loss, 5)}")
+
+    def maybe_save_checkpoint(self, loss: Tensor) -> None:
+        if self.step % self.cfg.trainer.checkpoint_every_steps == 0:
+            name = f"ckpt_{self.step}"
+        elif self.step == self.cfg.trainer.total_steps:
+            name = f"final_{self.step}"
+        else:
+            return
+
+        print(f"Saving checkpoint at step={self.step}...")
+        torch.save(
+            {
+                "step": self.step,
+                "model_state_dict": self.siren.state_dict(),
+                "optimizer_state_dict": self.optimizer.state_dict(),
+                "loss": loss.item(),
+            },
+            os.path.join(self._checkpoint_dir, f"{name}.pt"),
+        )

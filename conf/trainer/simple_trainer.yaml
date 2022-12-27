@@ -4,6 +4,9 @@ _recursive_: false
 optimizer:
   _target_: torch.optim.Adam
   lr: 1e-4
+  weight_decay: 1e-5
+
+continual: True
 
 total_steps: 1000
 cuda_if_available: True
@@ -11,3 +14,4 @@ switch_region_every_steps: 250
 
 summary_every_steps: 20
 eval_every_steps: 20
+checkpoint_every_steps: 250
