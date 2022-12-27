@@ -1,6 +1,5 @@
-from typing import Optional
-
 import numpy as np
+from torch import Tensor
 
 
 def rgb_float2uint(rgb: np.ndarray):
@@ -11,5 +10,5 @@ def rgb_float2uint(rgb: np.ndarray):
     return (np.clip(rgb, a_min=0, a_max=1) * 255).astype(np.uint8)
 
 
-def mse2psnr(mse: float, max_intensity: Optional[float] = 1):
+def mse2psnr(mse: float, max_intensity: float = 1):
     return 20 * np.log10(max_intensity) - 10 * np.log10(mse)

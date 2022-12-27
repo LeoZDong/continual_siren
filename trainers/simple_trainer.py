@@ -3,11 +3,14 @@ import os
 from typing import Tuple
 
 import torch
+import torchvision
 from hydra.utils import instantiate
 from omegaconf import DictConfig
 from torch import Tensor
 from torch.utils import data
-from torch.utils.tensorboard import SummaryWriter
+
+# from torch.utils.tensorboard import SummaryWriter
+from torch.utils.tensorboard.writer import SummaryWriter
 
 from utils import mse2psnr
 
@@ -26,7 +29,8 @@ class SimpleTrainer:
         self.optimizer = instantiate(
             self.cfg.trainer.optimizer, params=self.siren.parameters()
         )
-        self._tb_writer = SummaryWriter(os.getcwd())
+        self._work_dir = os.getcwd()
+        self._tb_writer = SummaryWriter(self._work_dir)
         self._checkpoint_dir = os.path.join(os.getcwd(), "ckpt")
         os.mkdir(self._checkpoint_dir)
 
@@ -73,7 +77,7 @@ class SimpleTrainer:
             self.maybe_save_checkpoint(loss)
 
     @torch.no_grad()
-    def eval(self, full_coords: bool) -> Tuple[float, Tensor]:
+    def eval(self, full_coords: bool) -> Tuple[float, Tensor, Tensor]:
         """Evaluate the current `self.siren` model.
         Args:
             full_coords: Whether to evaluate on the entire coordinate grid or the
@@ -230,8 +234,18 @@ class SimpleTrainer:
             # Print eval stats
             print(f"step={self.step}, eval_loss={round(eval_loss, 5)}")
 
+        if self.is_final_step:
+            # Save image output in final step
+            eval_loss, full_img_out, full_gt_img = self.eval(full_coords=True)
+            torchvision.utils.save_image(
+                full_img_out, os.path.join(self._work_dir, "full_img_out.png")
+            )
+            torchvision.utils.save_image(
+                full_gt_img, os.path.join(self._work_dir, "full_gt_img.png")
+            )
+
     def maybe_save_checkpoint(self, loss: Tensor) -> None:
-        if self.step == self.cfg.trainer.total_steps:
+        if self.is_final_step:
             name = f"final"
         elif self.step % self.cfg.trainer.checkpoint_every_steps == 0:
             name = f"ckpt_{self.step}"
@@ -249,4 +263,6 @@ class SimpleTrainer:
             os.path.join(self._checkpoint_dir, f"{name}.pt"),
         )
 
-    # def
+    @property
+    def is_final_step(self):
+        return self.step == self.cfg.trainer.total_steps
