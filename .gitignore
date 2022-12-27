@@ -133,3 +133,5 @@ BSDS300/
 
 # Experiment results
 exp/
+
+.DS_Store
