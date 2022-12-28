@@ -185,6 +185,9 @@ class SimpleTrainer:
                 global_step=self.step,
             )
 
+            # NOTE: This would be wrong if l1_lambda is nonzero!! `loss` would no longer
+            # be MSE, so the conversion is incorrect.
+            # FIXME
             psnr = mse2psnr(loss.item())
             self._tb_writer.add_scalar(
                 tag=f"train/psnr_on_cur_region",
