@@ -26,9 +26,12 @@ class SimpleTrainer:
             if not torch.cuda.is_available() or not cfg.trainer.cuda_if_available
             else torch.device("cuda")
         )
+
         self.optimizer = instantiate(
             self.cfg.trainer.optimizer, params=self.siren.parameters()
         )
+        self.l1_lambda = self.cfg.trainer.l1_lambda
+
         self._work_dir = os.getcwd()
         self._tb_writer = SummaryWriter(self._work_dir)
         self._checkpoint_dir = os.path.join(os.getcwd(), "ckpt")
@@ -61,9 +64,12 @@ class SimpleTrainer:
             model_output, coords = self.siren(model_input)
             loss = ((model_output - ground_truth) ** 2).mean()
 
-            # l1_lambda = 0.000
-            # l1_norm = sum(torch.norm(param, p=1) for param in self.siren.parameters())
-            # loss += l1_lambda * l1_norm
+            # L1 penalty for weight sparsity
+            if self.l1_lambda != 0:
+                l1_norm = sum(
+                    torch.norm(param, p=1) for param in self.siren.parameters()
+                )
+                loss += self.l1_lambda * l1_norm
 
             self.maybe_log(loss)
             self.maybe_eval_and_log()

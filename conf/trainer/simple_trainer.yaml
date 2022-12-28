@@ -4,9 +4,10 @@ _recursive_: false
 optimizer:
   _target_: torch.optim.Adam
   lr: 1e-4
-  weight_decay: 1e-5
+  weight_decay: 0
 
 continual: True
+l1_lambda: 0
 
 total_steps: 1000
 cuda_if_available: True
