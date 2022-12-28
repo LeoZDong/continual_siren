@@ -56,7 +56,7 @@ class SimpleTrainer:
         )
 
         self.step = 0
-        while self.step <= self.cfg.trainer.total_steps:
+        while self.step < self.cfg.trainer.total_steps:
             model_input, ground_truth = self.get_next_step_data(
                 model_input, ground_truth
             )
