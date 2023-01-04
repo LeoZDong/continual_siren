@@ -7,6 +7,8 @@ from trainers.simple_trainer import SimpleTrainer
 
 
 class NodeSharpenTrainer(SimpleTrainer):
+    """Trainer that implements node sharpening during training."""
+
     def __init__(self, cfg: DictConfig, **kwargs) -> None:
         super().__init__(cfg, **kwargs)
         self.sharpen_ratio = cfg.trainer.sharpen_ratio
@@ -79,7 +81,7 @@ class NodeSharpenTrainer(SimpleTrainer):
 
             #### Signal fitting phase ####
             model_output, coords = self.siren(model_input)
-            loss = ((model_output - ground_truth) ** 2).mean()
+            loss = self.loss(model_output, ground_truth)
 
             # L1 penalty for weight sparsity
             if self.l1_lambda != 0:

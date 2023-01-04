@@ -17,6 +17,10 @@ from utils import mse2psnr
 
 
 class SimpleTrainer:
+    """Simple continual learning trainer. Used as either the default trainer or the base
+    class for other trainers.
+    """
+
     def __init__(self, cfg: DictConfig, **kwargs):
         self.cfg = cfg
         self.continual = self.cfg.trainer.continual
@@ -63,7 +67,7 @@ class SimpleTrainer:
             )
 
             model_output, coords = self.siren(model_input)
-            loss = ((model_output - ground_truth) ** 2).mean()
+            loss = self.loss(model_output, ground_truth)
             self.maybe_log(loss)
 
             # L1 penalty for weight sparsity
@@ -120,7 +124,7 @@ class SimpleTrainer:
                     self.dataset.pixels_regions[backward_idx].to(self.device),
                 )
                 model_output = self.siren(model_input)[0]
-                eval_loss += ((model_output - ground_truth) ** 2).mean().item()
+                eval_loss += self.loss(model_output, ground_truth).item()
 
             return eval_loss, None, None
 
@@ -144,7 +148,7 @@ class SimpleTrainer:
         model_output = self.siren(model_input)[0]
         side_length = int(math.sqrt(model_output.shape[0]))
 
-        eval_loss = ((model_output - ground_truth) ** 2).mean().item()
+        eval_loss = self.loss(model_output, ground_truth).item()
 
         # Recover spatial dimension for visualization
         img_out = (
@@ -166,6 +170,10 @@ class SimpleTrainer:
         self.siren.train()
 
         return eval_loss, img_out, gt_img_out
+
+    def loss(self, model_output: Tensor, ground_truth: Tensor, **kwargs) -> Tensor:
+        """Calculate MSE loss."""
+        return ((model_output - ground_truth) ** 2).mean()
 
     def get_next_step_data(
         self, model_input: Tensor, ground_truth: Tensor
