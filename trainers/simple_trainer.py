@@ -296,7 +296,7 @@ class SimpleTrainer:
                 f"step={self.step}, eval_loss_full={round(eval_loss_full, 5)}, eval_loss_backward={round(eval_loss_backward, 5)}"
             )
 
-        if self.is_final_step:
+        if self.is_final_step(self.step + 1):
             # Save image output in final step
             eval_loss, full_img_out, full_gt_img = self.eval(eval_coords="full")
             torchvision.utils.save_image(
@@ -307,7 +307,7 @@ class SimpleTrainer:
             )
 
     def maybe_save_checkpoint(self, loss: Tensor) -> None:
-        if self.is_final_step:
+        if self.is_final_step(self.step):
             name = f"final"
         elif self.step % self.cfg.trainer.checkpoint_every_steps == 0:
             name = f"ckpt_{self.step}"
@@ -325,6 +325,5 @@ class SimpleTrainer:
             os.path.join(self._checkpoint_dir, f"{name}.pt"),
         )
 
-    @property
-    def is_final_step(self):
-        return self.step == self.cfg.trainer.total_steps
+    def is_final_step(self, step):
+        return step == self.cfg.trainer.total_steps
