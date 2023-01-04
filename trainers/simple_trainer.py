@@ -89,7 +89,7 @@ class SimpleTrainer:
             full_coords: Whether to evaluate on the entire coordinate grid or the
                 current coordinate region.
         Returns:
-            eval_loss: Evaluation loss on the entire input image.
+            eval_loss: Evaluation MSE loss on the entire input image.
             img_out (side_length, side_length, 3): Model output as float RGB tensor for
                 visualization.
             ground_truth (side_length, side_length, 3): Ground truth image for comparison.

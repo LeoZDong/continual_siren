@@ -1,0 +1,13 @@
+defaults:
+  - simple_trainer
+
+_target_: "trainers.node_sharpen_trainer.NodeSharpenTrainer"
+_recursive_: false
+
+sharpen_optimizer:
+  _target_: torch.optim.Adam
+  lr: 1e-4
+  weight_decay: 0
+
+sharpen_ratio: log
+sharpen_factor: 0.2

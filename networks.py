@@ -80,12 +80,14 @@ class Siren(nn.Module):
         super().__init__()
 
         self.net = []
+        #### First layer ####
         self.net.append(
             SineLayer(
                 in_features, hidden_features, is_first=True, omega_0=first_omega_0
             )
         )
 
+        #### Hidden layers ####
         for i in range(hidden_layers):
             self.net.append(
                 SineLayer(
@@ -96,6 +98,7 @@ class Siren(nn.Module):
                 )
             )
 
+        #### Output layer ####
         if outermost_linear:
             final_linear = nn.Linear(hidden_features, out_features)
 
