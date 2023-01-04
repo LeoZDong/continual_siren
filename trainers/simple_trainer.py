@@ -298,7 +298,7 @@ class SimpleTrainer:
 
         if self.is_final_step:
             # Save image output in final step
-            eval_loss, full_img_out, full_gt_img = self.eval(full_coords=True)
+            eval_loss, full_img_out, full_gt_img = self.eval(eval_coords="full")
             torchvision.utils.save_image(
                 full_img_out, os.path.join(self._work_dir, "full_img_out.png")
             )
