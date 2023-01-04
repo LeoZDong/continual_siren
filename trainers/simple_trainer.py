@@ -197,7 +197,7 @@ class SimpleTrainer:
             If time to switch, return the new feature-label pair. Else, return the
                 current feature-label pair.
         """
-        if self.step and self.step % self.cfg.trainer.switch_region_every_steps == 0:
+        if self.need_to_switch_region:
             new_region = (self.dataset.cur_region + 1) % self.dataset.num_regions
             print(
                 f"step={self.step}. Switching region from {self.dataset.cur_region} to {new_region}!"
@@ -269,10 +269,10 @@ class SimpleTrainer:
             self._tb_writer.add_image(
                 "full/eval_out_full", full_img_out, global_step=self.step
             )
-            # TODO: Only add in first step
-            self._tb_writer.add_image(
-                "full/gt_full", full_gt_img, global_step=self.step
-            )
+            if self.step == 0:
+                self._tb_writer.add_image(
+                    "full/gt_full", full_gt_img, global_step=self.step
+                )
 
             if self.continual:
                 # Log model output image on the current region
@@ -284,7 +284,6 @@ class SimpleTrainer:
                 )
 
                 # TODO: Only log ground-truth for comparison once (because it stays the same)
-                # if self.step and self.step % self.cfg.trainer.switch_region_every_steps == 0:
                 self._tb_writer.add_image(
                     f"region/gt_region{region_id}",
                     region_gt_img,
@@ -325,5 +324,9 @@ class SimpleTrainer:
             os.path.join(self._checkpoint_dir, f"{name}.pt"),
         )
 
-    def is_final_step(self, step):
+    def is_final_step(self, step) -> bool:
         return step == self.cfg.trainer.total_steps
+
+    @property
+    def need_to_switch_region(self) -> bool:
+        return self.step and self.step % self.cfg.trainer.switch_region_every_steps == 0
