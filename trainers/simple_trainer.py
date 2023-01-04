@@ -64,6 +64,7 @@ class SimpleTrainer:
 
             model_output, coords = self.siren(model_input)
             loss = ((model_output - ground_truth) ** 2).mean()
+            self.maybe_log(loss)
 
             # L1 penalty for weight sparsity
             if self.l1_lambda != 0:
@@ -72,9 +73,7 @@ class SimpleTrainer:
                 )
                 loss += self.l1_lambda * l1_norm
 
-            self.maybe_log(loss)
             self.maybe_eval_and_log()
-
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step()
@@ -219,10 +218,6 @@ class SimpleTrainer:
                 scalar_value=loss.item(),
                 global_step=self.step,
             )
-
-            # NOTE: This would be wrong if l1_lambda is nonzero!! `loss` would no longer
-            # be MSE, so the conversion is incorrect.
-            # FIXME
             psnr = mse2psnr(loss.item())
             self._tb_writer.add_scalar(
                 tag=f"train/psnr_on_cur_region",
