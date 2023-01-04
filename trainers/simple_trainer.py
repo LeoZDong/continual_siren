@@ -1,7 +1,8 @@
 import math
 import os
-from typing import Tuple
+from typing import Optional, Tuple, Union
 
+import numpy as np
 import torch
 import torchvision
 from hydra.utils import instantiate
@@ -83,29 +84,63 @@ class SimpleTrainer:
             self.maybe_save_checkpoint(loss)
 
     @torch.no_grad()
-    def eval(self, full_coords: bool) -> Tuple[float, Tensor, Tensor]:
+    def eval(
+        self, eval_coords: Union[str, int]
+    ) -> Tuple[Optional[float], Optional[Tensor], Optional[Tensor]]:
         """Evaluate the current `self.siren` model.
         Args:
-            full_coords: Whether to evaluate on the entire coordinate grid or the
-                current coordinate region.
+            eval_coords: If 'full', eval on the entire coordinate grid. If int, eval on
+                the specified region index. If 'current', eval on the current region. If
+                'backward', eval on all regions before and not including current region.
+
+            Whether to evaluate on the entire coordinate grid or evaluate
+                separately on each coordinate region.
+
         Returns:
-            eval_loss: Evaluation MSE loss on the entire input image.
-            img_out (side_length, side_length, 3): Model output as float RGB tensor for
-                visualization.
+            eval_losses: Evaluation MSE loss on the specified `eval_coords`.
+            img_out (side_length, side_length, 3): Model output for the specified
+                `eval_coords` as RGB tensor. If `eval_coords == 'backward'`, return None.
             ground_truth (side_length, side_length, 3): Ground truth image for comparison.
+                If `eval_coords == 'backward'`, return None.
         """
         self.siren.eval()
 
-        if full_coords:
+        #### Evaluate on multiple coordinate grids. No output image. ####
+        if eval_coords == "backward":
+            regions = np.arange(self.dataset.num_regions)
+            backward_idxs = regions[regions < self.dataset.cur_region]
+
+            # If current region is 0, then there is no backward loss to be calculated
+            if len(backward_idxs) == 0:
+                return 1, None, None
+
+            eval_loss = 0
+            for backward_idx in backward_idxs:
+                model_input, ground_truth = (
+                    self.dataset.coords_regions[backward_idx].to(self.device),
+                    self.dataset.pixels_regions[backward_idx].to(self.device),
+                )
+                model_output = self.siren(model_input)[0]
+                eval_loss += ((model_output - ground_truth) ** 2).mean().item()
+
+            return eval_loss, None, None
+
+        #### Evaluate on specified coordinate grid ####
+        if eval_coords == "current":
             model_input, ground_truth = (
-                self.dataset.full_coords,
-                self.dataset.full_pixels,
+                self.dataset.coords.to(self.device),
+                self.dataset.pixels.to(self.device),
+            )
+        elif eval_coords == "full":
+            model_input, ground_truth = (
+                self.dataset.full_coords.to(self.device),
+                self.dataset.full_pixels.to(self.device),
             )
         else:
-            model_input, ground_truth = self.dataset.coords, self.dataset.pixels
-
-        model_input = model_input.to(self.device)
-        ground_truth = ground_truth.to(self.device)
+            model_input, ground_truth = (
+                self.dataset.coords_regions[eval_coords].to(self.device),
+                self.dataset.pixels_regions[eval_coords].to(self.device),
+            )
 
         model_output = self.siren(model_input)[0]
         side_length = int(math.sqrt(model_output.shape[0]))
@@ -200,48 +235,66 @@ class SimpleTrainer:
     def maybe_eval_and_log(self) -> None:
         """Evaluate and log evaluation summary if appropriate."""
         if self.step % self.cfg.trainer.eval_every_steps == 0:
-            eval_loss, full_img_out, full_gt_img = self.eval(full_coords=True)
-            _, region_img_out, region_gt_img = self.eval(full_coords=False)
+            eval_loss_full, full_img_out, full_gt_img = self.eval(eval_coords="full")
+            eval_loss_backward, _, _ = self.eval(eval_coords="backward")
+            _, region_img_out, region_gt_img = self.eval(eval_coords="current")
 
-            # Log evaluation loss
+            # Log evaluation losses
             self._tb_writer.add_scalar(
                 tag="eval/loss_on_full_img",
-                scalar_value=eval_loss,
+                scalar_value=eval_loss_full,
+                global_step=self.step,
+            )
+            psnr_full = mse2psnr(eval_loss_full)
+            self._tb_writer.add_scalar(
+                tag="eval/psnr_on_full_img",
+                scalar_value=psnr_full,
                 global_step=self.step,
             )
 
-            psnr = mse2psnr(eval_loss)
-            self._tb_writer.add_scalar(
-                tag="eval/psnr_on_full_img",
-                scalar_value=psnr,
-                global_step=self.step,
-            )
+            if self.continual:
+                self._tb_writer.add_scalar(
+                    tag="eval/loss_on_backward_regions",
+                    scalar_value=eval_loss_backward,
+                    global_step=self.step,
+                )
+                psnr_backward = mse2psnr(eval_loss_backward)
+                self._tb_writer.add_scalar(
+                    tag="eval/psnr_on_backward_regions",
+                    scalar_value=psnr_backward,
+                    global_step=self.step,
+                )
 
             # Log model output image on the full coordinates
             self._tb_writer.add_image(
                 "full/eval_out_full", full_img_out, global_step=self.step
             )
+            # TODO: Only add in first step
             self._tb_writer.add_image(
                 "full/gt_full", full_gt_img, global_step=self.step
             )
 
-            # Log model output image on the current region
-            region_id = self.dataset.cur_region
-            self._tb_writer.add_image(
-                f"region/eval_out_region{region_id}",
-                region_img_out,
-                global_step=self.step,
-            )
-            self._tb_writer.add_image(
-                f"region/gt_region{region_id}",
-                region_gt_img,
-                global_step=self.step,
-            )
+            if self.continual:
+                # Log model output image on the current region
+                region_id = self.dataset.cur_region
+                self._tb_writer.add_image(
+                    f"region/eval_out_region{region_id}",
+                    region_img_out,
+                    global_step=self.step,
+                )
 
-            # TODO: Only log ground-truth for comparison once (because it stays the same)
+                # TODO: Only log ground-truth for comparison once (because it stays the same)
+                # if self.step and self.step % self.cfg.trainer.switch_region_every_steps == 0:
+                self._tb_writer.add_image(
+                    f"region/gt_region{region_id}",
+                    region_gt_img,
+                    global_step=self.step,
+                )
 
             # Print eval stats
-            print(f"step={self.step}, eval_loss={round(eval_loss, 5)}")
+            print(
+                f"step={self.step}, eval_loss_full={round(eval_loss_full, 5)}, eval_loss_backward={round(eval_loss_backward, 5)}"
+            )
 
         if self.is_final_step:
             # Save image output in final step
