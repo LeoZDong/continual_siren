@@ -206,6 +206,9 @@ class SimpleTrainer:
                 scalar_value=loss.item(),
                 global_step=self.step,
             )
+
+            # FIXME: With EWC and other regularization, `loss` is not MSE loss, so the
+            # PSNR calculation will be off!!
             psnr = mse2psnr(loss.item())
             self._tb_writer.add_scalar(
                 tag=f"train/psnr_on_cur_region",
@@ -223,11 +226,6 @@ class SimpleTrainer:
                 eval_coords="full", output_img=True
             )
             # Log evaluation loss for the full image
-            self._tb_writer.add_scalar(
-                tag="eval/loss_on_full_img",
-                scalar_value=eval_loss_full,
-                global_step=self.step,
-            )
             psnr_full = mse2psnr(eval_loss_full)
             self._tb_writer.add_scalar(
                 tag="eval/psnr_on_full_img",
@@ -244,11 +242,6 @@ class SimpleTrainer:
                     eval_loss_backward.append(eval_loss)
 
                 # Log evaluation loss for each region
-                self._tb_writer.add_scalar(
-                    tag=f"eval/loss_on_region{region}",
-                    scalar_value=eval_loss,
-                    global_step=self.step,
-                )
                 psnr = mse2psnr(eval_loss)
                 self._tb_writer.add_scalar(
                     tag=f"eval/psnr_on_region{region}",
@@ -259,11 +252,6 @@ class SimpleTrainer:
             # Log evaluation loss for backward regions
             if self.continual and len(eval_loss_backward) > 0:
                 eval_loss_backward = np.mean(eval_loss_backward)
-                self._tb_writer.add_scalar(
-                    tag="eval/loss_on_backward_regions",
-                    scalar_value=eval_loss_backward,
-                    global_step=self.step,
-                )
                 psnr_backward = mse2psnr(eval_loss_backward)
                 self._tb_writer.add_scalar(
                     tag="eval/psnr_on_backward_regions",
