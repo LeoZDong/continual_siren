@@ -46,8 +46,8 @@ class NodeSharpenTrainer(SimpleTrainer):
 
             layers_to_sharpen = []
             for i, layer in enumerate(activations.values()):
-                # Only sharpen last layer
-                if i != len(activations) - 1:
+                # Only sharpen first layer
+                if i != 0:
                     continue
                 layers_to_sharpen.append(layer)
 

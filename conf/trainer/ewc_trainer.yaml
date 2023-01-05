@@ -1,0 +1,7 @@
+defaults:
+  - simple_trainer
+
+_target_: "trainers.ewc_trainer.EWCTrainer"
+_recursive_: false
+
+reg_coef: 100
