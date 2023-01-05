@@ -88,47 +88,25 @@ class SimpleTrainer:
 
     @torch.no_grad()
     def eval(
-        self, eval_coords: Union[str, int]
+        self,
+        eval_coords: Union[str, int],
+        output_img: bool = True,
     ) -> Tuple[Optional[float], Optional[Tensor], Optional[Tensor]]:
         """Evaluate the current `self.siren` model.
         Args:
             eval_coords: If 'full', eval on the entire coordinate grid. If int, eval on
-                the specified region index. If 'current', eval on the current region. If
-                'backward', eval on all regions before and not including current region.
-
-            Whether to evaluate on the entire coordinate grid or evaluate
-                separately on each coordinate region.
+                the specified region index. If 'current', eval on the current region.
+            output_img: Whether to return model output and ground truth as RGB image.
 
         Returns:
             eval_losses: Evaluation MSE loss on the specified `eval_coords`.
             img_out (side_length, side_length, 3): Model output for the specified
-                `eval_coords` as RGB tensor. If `eval_coords == 'backward'`, return None.
+                `eval_coords` as RGB tensor.
             ground_truth (side_length, side_length, 3): Ground truth image for comparison.
-                If `eval_coords == 'backward'`, return None.
         """
         self.siren.eval()
 
-        #### Evaluate on multiple coordinate grids. No output image. ####
-        if eval_coords == "backward":
-            regions = np.arange(self.dataset.num_regions)
-            backward_idxs = regions[regions < self.dataset.cur_region]
-
-            # If current region is 0, then there is no backward loss to be calculated
-            if len(backward_idxs) == 0:
-                return 1, None, None
-
-            eval_loss = 0
-            for backward_idx in backward_idxs:
-                model_input, ground_truth = (
-                    self.dataset.coords_regions[backward_idx].to(self.device),
-                    self.dataset.pixels_regions[backward_idx].to(self.device),
-                )
-                model_output = self.siren(model_input)[0]
-                eval_loss += self.loss(model_output, ground_truth).item()
-
-            return eval_loss, None, None
-
-        #### Evaluate on specified coordinate grid ####
+        # Pick the specified coordinate grid to evaluate on
         if eval_coords == "current":
             model_input, ground_truth = (
                 self.dataset.coords.to(self.device),
@@ -146,11 +124,15 @@ class SimpleTrainer:
             )
 
         model_output = self.siren(model_input)[0]
-        side_length = int(math.sqrt(model_output.shape[0]))
-
         eval_loss = self.loss(model_output, ground_truth).item()
 
+        self.siren.train()
+
+        if not output_img:
+            return eval_loss, None, None
+
         # Recover spatial dimension for visualization
+        side_length = int(math.sqrt(model_output.shape[0]))
         img_out = (
             model_output.cpu()
             .view(side_length, side_length, -1)
@@ -166,8 +148,6 @@ class SimpleTrainer:
 
         # Clamp image in [0, 1] for visualization
         img_out = torch.clip(img_out, 0, 1)
-
-        self.siren.train()
 
         return eval_loss, img_out, gt_img_out
 
@@ -238,11 +218,11 @@ class SimpleTrainer:
     def maybe_eval_and_log(self) -> None:
         """Evaluate and log evaluation summary if appropriate."""
         if self.step % self.cfg.trainer.eval_every_steps == 0:
-            eval_loss_full, full_img_out, full_gt_img = self.eval(eval_coords="full")
-            eval_loss_backward, _, _ = self.eval(eval_coords="backward")
-            _, region_img_out, region_gt_img = self.eval(eval_coords="current")
-
-            # Log evaluation losses
+            # Evaluate on the entire image
+            eval_loss_full, full_img_out, full_gt_img = self.eval(
+                eval_coords="full", output_img=True
+            )
+            # Log evaluation loss for the full image
             self._tb_writer.add_scalar(
                 tag="eval/loss_on_full_img",
                 scalar_value=eval_loss_full,
@@ -255,7 +235,30 @@ class SimpleTrainer:
                 global_step=self.step,
             )
 
-            if self.continual:
+            # Evaluate on each region individually
+            regions = np.arange(self.dataset.num_regions)
+            eval_loss_backward = []
+            for region in regions:
+                eval_loss = self.eval(eval_coords=region, output_img=False)[0]
+                if region < self.dataset.cur_region:
+                    eval_loss_backward.append(eval_loss)
+
+                # Log evaluation loss for each region
+                self._tb_writer.add_scalar(
+                    tag=f"eval/loss_on_region{region}",
+                    scalar_value=eval_loss,
+                    global_step=self.step,
+                )
+                psnr = mse2psnr(eval_loss)
+                self._tb_writer.add_scalar(
+                    tag=f"eval/psnr_on_region{region}",
+                    scalar_value=psnr,
+                    global_step=self.step,
+                )
+
+            # Log evaluation loss for backward regions
+            if self.continual and len(eval_loss_backward) > 0:
+                eval_loss_backward = np.mean(eval_loss_backward)
                 self._tb_writer.add_scalar(
                     tag="eval/loss_on_backward_regions",
                     scalar_value=eval_loss_backward,
@@ -268,7 +271,7 @@ class SimpleTrainer:
                     global_step=self.step,
                 )
 
-            # Log model output image on the full coordinates
+            # Record model output image on the full coordinate
             self._tb_writer.add_image(
                 "full/eval_out_full", full_img_out, global_step=self.step
             )
@@ -277,30 +280,14 @@ class SimpleTrainer:
                     "full/gt_full", full_gt_img, global_step=self.step
                 )
 
-            if self.continual:
-                # Log model output image on the current region
-                region_id = self.dataset.cur_region
-                self._tb_writer.add_image(
-                    f"region/eval_out_region{region_id}",
-                    region_img_out,
-                    global_step=self.step,
-                )
-
-                # TODO: Only log ground-truth for comparison once (because it stays the same)
-                self._tb_writer.add_image(
-                    f"region/gt_region{region_id}",
-                    region_gt_img,
-                    global_step=self.step,
-                )
-
             # Print eval stats
-            print(
-                f"step={self.step}, eval_loss_full={round(eval_loss_full, 5)}, eval_loss_backward={round(eval_loss_backward, 5)}"
-            )
+            print(f"step={self.step}, eval_psnr_full={round(psnr_full, 5)}")
 
         if self.is_final_step(self.step + 1):
             # Save image output in final step
-            eval_loss, full_img_out, full_gt_img = self.eval(eval_coords="full")
+            eval_loss, full_img_out, full_gt_img = self.eval(
+                eval_coords="full", output_img=True
+            )
             torchvision.utils.save_image(
                 full_img_out, os.path.join(self._work_dir, "full_img_out.png")
             )
