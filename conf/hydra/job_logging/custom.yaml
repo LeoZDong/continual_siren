@@ -8,8 +8,12 @@ handlers:
     class: logging.StreamHandler
     formatter: simple
     stream: ext://sys.stdout
+  file:
+    class: logging.FileHandler
+    formatter: simple
+    filename: main .log
 root:
-  # handlers: [console] # Uncomment to display log in console
-  handlers: []
+  # handlers: [console] # Uncomment to display log in console only
+  handlers: [file]
 
 disable_existing_loggers: false
