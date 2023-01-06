@@ -5,10 +5,10 @@ defaults:
   - trainer: simple_trainer
   - override hydra/job_logging: custom
 
-experiment_tag: "default"
+exp_tag: "default"
 root_dir: "./exp"
 hydra:
   run:
-    dir: ${root_dir}/${experiment_tag}/${now:%Y.%m.%d}/${now:%H%M%S}
+    dir: ${root_dir}/${exp_tag}/${now:%Y.%m.%d}/${now:%H%M%S}
   job:
     chdir: true
