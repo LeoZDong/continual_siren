@@ -3,6 +3,7 @@ defaults:
   - network: siren
   - data: single_image
   - trainer: simple_trainer
+  - override hydra/job_logging: custom
 
 experiment_tag: "default"
 root_dir: "./exp"

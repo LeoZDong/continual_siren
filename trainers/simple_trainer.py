@@ -1,3 +1,4 @@
+import logging
 import math
 import os
 from typing import Optional, Tuple, Union
@@ -9,11 +10,13 @@ from hydra.utils import instantiate
 from omegaconf import DictConfig
 from torch import Tensor
 from torch.utils import data
-
-# from torch.utils.tensorboard import SummaryWriter
 from torch.utils.tensorboard.writer import SummaryWriter
+from tqdm import tqdm
 
 from utils import mse2psnr
+
+# A logger for this file
+log = logging.getLogger(__name__)
 
 
 class SimpleTrainer:
@@ -61,6 +64,13 @@ class SimpleTrainer:
         )
 
         self.step = 0
+        # pbar = tqdm(total=100)
+        # for i in range(10):
+        #     sleep(0.1)
+        #     pbar.update(10)
+        #     pbar.close()
+
+        progress_bar = tqdm(total=self.cfg.trainer.total_steps)
         while self.step < self.cfg.trainer.total_steps:
             model_input, ground_truth = self.get_next_step_data(
                 model_input, ground_truth
@@ -82,9 +92,12 @@ class SimpleTrainer:
             loss.backward()
             self.optimizer.step()
             self.step += 1
+            progress_bar.update(1)
 
             # Save checkpoint
             self.maybe_save_checkpoint(loss)
+
+        progress_bar.close()
 
     @torch.no_grad()
     def eval(
@@ -186,7 +199,7 @@ class SimpleTrainer:
         """
         if self.need_to_switch_region:
             new_region = (self.dataset.cur_region + 1) % self.dataset.num_regions
-            print(
+            log.info(
                 f"step={self.step}. Switching region from {self.dataset.cur_region} to {new_region}!"
             )
             self.dataset.set_cur_region(new_region)
@@ -216,7 +229,7 @@ class SimpleTrainer:
                 global_step=self.step,
             )
 
-            print(f"step={self.step}, train_loss={round(loss.item(), 5)}")
+            log.info(f"step={self.step}, train_loss={round(loss.item(), 5)}")
 
     def maybe_eval_and_log(self) -> None:
         """Evaluate and log evaluation summary if appropriate."""
@@ -269,7 +282,7 @@ class SimpleTrainer:
                 )
 
             # Print eval stats
-            print(f"step={self.step}, eval_psnr_full={round(psnr_full, 5)}")
+            log.info(f"step={self.step}, eval_psnr_full={round(psnr_full, 5)}")
 
         if self.is_final_step(self.step + 1):
             # Save image output in final step
@@ -291,7 +304,7 @@ class SimpleTrainer:
         else:
             return
 
-        print(f"Saving checkpoint at step={self.step}...")
+        log.info(f"Saving checkpoint at step={self.step}...")
         torch.save(
             {
                 "step": self.step,
