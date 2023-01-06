@@ -135,3 +135,4 @@ BSDS300/
 exp/
 
 .DS_Store
+exp_scheduled.sh
