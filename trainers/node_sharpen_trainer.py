@@ -2,6 +2,7 @@ import numpy as np
 import torch
 from hydra.utils import instantiate
 from omegaconf import DictConfig
+from tqdm import tqdm
 
 from trainers.simple_trainer import SimpleTrainer
 
@@ -26,6 +27,7 @@ class NodeSharpenTrainer(SimpleTrainer):
             self.device
         )
 
+        progress_bar = tqdm(total=self.cfg.trainer.total_steps)
         self.step = 0
         while self.step < self.cfg.trainer.total_steps:
             model_input, ground_truth = self.get_next_step_data(
@@ -98,6 +100,9 @@ class NodeSharpenTrainer(SimpleTrainer):
             loss.backward()
             self.optimizer.step()
             self.step += 1
+            progress_bar.update(1)
 
             # Save checkpoint
             self.maybe_save_checkpoint(loss)
+
+        progress_bar.close()

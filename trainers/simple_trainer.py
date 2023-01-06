@@ -64,12 +64,6 @@ class SimpleTrainer:
         )
 
         self.step = 0
-        # pbar = tqdm(total=100)
-        # for i in range(10):
-        #     sleep(0.1)
-        #     pbar.update(10)
-        #     pbar.close()
-
         progress_bar = tqdm(total=self.cfg.trainer.total_steps)
         while self.step < self.cfg.trainer.total_steps:
             model_input, ground_truth = self.get_next_step_data(
