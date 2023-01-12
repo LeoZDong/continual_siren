@@ -1,10 +1,15 @@
+import logging
+
 import numpy as np
 import torch
 from hydra.utils import instantiate
 from omegaconf import DictConfig
+from torch import Tensor
 from tqdm import tqdm
 
 from trainers.simple_trainer import SimpleTrainer
+
+log = logging.getLogger(__name__)
 
 
 class NodeSharpenTrainer(SimpleTrainer):
@@ -36,6 +41,37 @@ class NodeSharpenTrainer(SimpleTrainer):
             )
 
             #### Node sharpening phase ####
+            self.maybe_sharpen(model_input)
+
+            #### Signal fitting phase ####
+            model_output, coords = self.siren(model_input)
+            loss = self.loss(model_output, ground_truth)
+
+            # L1 penalty for weight sparsity
+            if self.l1_lambda != 0:
+                l1_norm = sum(
+                    torch.norm(param, p=1) for param in self.siren.parameters()
+                )
+                loss += self.l1_lambda * l1_norm
+
+            self.maybe_log(loss)
+            self.maybe_eval_and_log()
+
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step()
+            self.step += 1
+            progress_bar.update(1)
+
+            # Save checkpoint
+            self.maybe_save_checkpoint(loss)
+
+        progress_bar.close()
+
+    def maybe_sharpen(self, model_input: Tensor):
+        if self.step % self.cfg.trainer.sharpen_every_steps == 0:
+            log.info(f"Sharpening at step {self.step}...")
+
             activations = self.siren.forward_with_activations(
                 model_input, retain_grad=False, include_pre_nonlin=False
             )
@@ -78,28 +114,3 @@ class NodeSharpenTrainer(SimpleTrainer):
             self.sharpen_optimizer.zero_grad()
             node_sharpening_loss.backward()
             self.sharpen_optimizer.step()
-
-            #### Signal fitting phase ####
-            model_output, coords = self.siren(model_input)
-            loss = self.loss(model_output, ground_truth)
-
-            # L1 penalty for weight sparsity
-            if self.l1_lambda != 0:
-                l1_norm = sum(
-                    torch.norm(param, p=1) for param in self.siren.parameters()
-                )
-                loss += self.l1_lambda * l1_norm
-
-            self.maybe_log(loss)
-            self.maybe_eval_and_log()
-
-            self.optimizer.zero_grad()
-            loss.backward()
-            self.optimizer.step()
-            self.step += 1
-            progress_bar.update(1)
-
-            # Save checkpoint
-            self.maybe_save_checkpoint(loss)
-
-        progress_bar.close()
