@@ -63,16 +63,17 @@ class NodeSharpenTrainer(SimpleTrainer):
                 idx_blunt = nodes_sorted[:, num_to_sharpen:]
 
                 # We want the magnitude of `idx_sharpen` to be close to 1
-                sharpen_loss = (
-                    self.sharpen_factor
-                    * (1 - torch.gather(layer, 1, idx_sharpen).abs()).sum()
+                sharpen_loss = self.sharpen_factor * (
+                    (1 - torch.gather(layer, 1, idx_sharpen)).square().sum()
                 )
                 # We want the magnitude of `idx_blunt` to be close to 0
-                blunt_loss = (
-                    self.sharpen_factor * torch.gather(layer, 1, idx_blunt).abs()
-                ).sum()
+                blunt_loss = self.sharpen_factor * (
+                    (torch.gather(layer, 1, idx_blunt).square()).sum()
+                )
 
-                node_sharpening_loss += sharpen_loss + blunt_loss
+                node_sharpening_loss += (sharpen_loss + blunt_loss) / len(
+                    layers_to_sharpen
+                )
 
             self.sharpen_optimizer.zero_grad()
             node_sharpening_loss.backward()
