@@ -11,3 +11,4 @@ sharpen_optimizer:
 
 sharpen_ratio: log
 sharpen_factor: 0.2
+which_layers_to_sharpen: [0]

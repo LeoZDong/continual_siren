@@ -129,10 +129,17 @@ class Siren(nn.Module):
         return output, coords
 
     def forward_with_activations(
-        self, coords: Tensor, retain_grad: bool = False
+        self, coords: Tensor, retain_grad: bool = False, include_pre_nonlin: bool = True
     ) -> OrderedDict[str, Tensor]:
-        """Return not only model output, but also intermediate activations.
-        This is only used for visualizing activations.
+        """Return not only model output, but also intermediate activations. By default,
+        both pre- and post-sine activations are recorded! For example,
+        "<class 'networks.SineLayer'>_0" is the pre-sine activation, and
+        "<class 'networks.SineLayer'>_1" is the post-sine activation.
+
+        Args:
+            coords: Model input.
+            retain_grad: Whether to retain gradients for intermediate activations.
+            include_pre_nonlin: Whether to include pre-nonlinearity activations.
         """
         activations = OrderedDict()
 
@@ -147,10 +154,11 @@ class Siren(nn.Module):
                     x.retain_grad()
                     intermed.retain_grad()
 
-                activations[
-                    "_".join((str(layer.__class__), "%d" % activation_count))
-                ] = intermed
-                activation_count += 1
+                if include_pre_nonlin:
+                    activations[
+                        "_".join((str(layer.__class__), "%d" % activation_count))
+                    ] = intermed
+                    activation_count += 1
             else:
                 x = layer(x)
 

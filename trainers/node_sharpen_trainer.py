@@ -17,6 +17,7 @@ class NodeSharpenTrainer(SimpleTrainer):
         self.sharpen_optimizer = instantiate(
             self.cfg.trainer.sharpen_optimizer, params=self.siren.parameters()
         )
+        self.which_layers_to_sharpen = self.cfg.trainer.which_layers_to_sharpen
 
     def train(self) -> None:
         # Prepare data:
@@ -36,7 +37,7 @@ class NodeSharpenTrainer(SimpleTrainer):
 
             #### Node sharpening phase ####
             activations = self.siren.forward_with_activations(
-                model_input, retain_grad=False
+                model_input, retain_grad=False, include_pre_nonlin=False
             )
             # Output layer has tag `len(layers_to_sharpen) - 2` because we exclude `input`
             # (first element in `layers_to_sharpen`) and it is zero-indexed.
@@ -45,14 +46,9 @@ class NodeSharpenTrainer(SimpleTrainer):
             )
             del activations[output_layer_name]
             del activations["input"]
+            activations = list(activations.values())
 
-            layers_to_sharpen = []
-            for i, layer in enumerate(activations.values()):
-                # Only sharpen first layer
-                # TODO: Make this configurable
-                if i != 0:
-                    continue
-                layers_to_sharpen.append(layer)
+            layers_to_sharpen = [activations[i] for i in self.which_layers_to_sharpen]
 
             node_sharpening_loss = 0
             for layer in layers_to_sharpen:
