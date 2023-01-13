@@ -54,7 +54,60 @@ class SineLayer(nn.Module):
         return torch.sin(intermediate), intermediate
 
 
-class Siren(nn.Module):
+class BaseNet(nn.Module):
+    """Base network that defines a template of forward pass."""
+
+    def forward(self, coords: Tensor) -> Tuple[Tensor, Tensor]:
+        coords = (
+            coords.clone().detach().requires_grad_(True)
+        )  # allows to take derivative w.r.t. input
+        output = self.net(coords)
+        return output, coords
+
+    def forward_with_activations(
+        self, coords: Tensor, retain_grad: bool = False, include_pre_nonlin: bool = True
+    ) -> OrderedDict[str, Tensor]:
+        """Return not only model output, but also intermediate activations. By default,
+        both pre- and post-sine activations are recorded! For example,
+        "<class 'networks.SineLayer'>_0" is the pre-sine activation, and
+        "<class 'networks.SineLayer'>_1" is the post-sine activation.
+
+        Args:
+            coords: Model input.
+            retain_grad: Whether to retain gradients for intermediate activations.
+            include_pre_nonlin: Whether to include pre-nonlinearity activations.
+        """
+        activations = OrderedDict()
+
+        activation_count = 0
+        x = coords.clone().detach().requires_grad_(True)
+        activations["input"] = x
+        for i, layer in enumerate(self.net):
+            if isinstance(layer, SineLayer):
+                x, intermed = layer.forward_with_intermediate(x)
+
+                if retain_grad:
+                    x.retain_grad()
+                    intermed.retain_grad()
+
+                if include_pre_nonlin:
+                    activations[
+                        "_".join((str(layer.__class__), "%d" % activation_count))
+                    ] = intermed
+                    activation_count += 1
+            else:
+                x = layer(x)
+
+                if retain_grad:
+                    x.retain_grad()
+
+            activations["_".join((str(layer.__class__), "%d" % activation_count))] = x
+            activation_count += 1
+
+        return activations
+
+
+class Siren(BaseNet):
     def __init__(
         self,
         in_features: int,
@@ -121,51 +174,43 @@ class Siren(nn.Module):
 
         self.net = nn.Sequential(*self.net)
 
-    def forward(self, coords: Tensor) -> Tuple[Tensor, Tensor]:
-        coords = (
-            coords.clone().detach().requires_grad_(True)
-        )  # allows to take derivative w.r.t. input
-        output = self.net(coords)
-        return output, coords
 
-    def forward_with_activations(
-        self, coords: Tensor, retain_grad: bool = False, include_pre_nonlin: bool = True
-    ) -> OrderedDict[str, Tensor]:
-        """Return not only model output, but also intermediate activations. By default,
-        both pre- and post-sine activations are recorded! For example,
-        "<class 'networks.SineLayer'>_0" is the pre-sine activation, and
-        "<class 'networks.SineLayer'>_1" is the post-sine activation.
-
+class ReLUNet(BaseNet):
+    def __init__(
+        self,
+        in_features: int,
+        hidden_features: int,
+        hidden_layers: int,
+        out_features: int,
+        outermost_linear: bool = False,
+        **kwargs,
+    ) -> None:
+        """Initialize a ReLU network.
         Args:
-            coords: Model input.
-            retain_grad: Whether to retain gradients for intermediate activations.
-            include_pre_nonlin: Whether to include pre-nonlinearity activations.
+            in_features: Dimension of input features.
+            hidden_features: Dimension of hidden features.
+            hidden_layers: Number of hidden layers.
+            out_features: Dimension of output features.
+            outermost_linear: Whether to use a linear layer for the outermost (output)
+                layer. If False, use a sine layer instead.
         """
-        activations = OrderedDict()
+        super().__init__()
 
-        activation_count = 0
-        x = coords.clone().detach().requires_grad_(True)
-        activations["input"] = x
-        for i, layer in enumerate(self.net):
-            if isinstance(layer, SineLayer):
-                x, intermed = layer.forward_with_intermediate(x)
+        self.net = []
+        #### First layer ####
+        self.net.append(nn.Linear(in_features, hidden_features))
+        self.net.append(nn.ReLU())
 
-                if retain_grad:
-                    x.retain_grad()
-                    intermed.retain_grad()
+        #### Hidden layers ####
+        for i in range(hidden_layers):
+            self.net.append(nn.Linear(hidden_features, hidden_features))
+            self.net.append(nn.ReLU())
 
-                if include_pre_nonlin:
-                    activations[
-                        "_".join((str(layer.__class__), "%d" % activation_count))
-                    ] = intermed
-                    activation_count += 1
-            else:
-                x = layer(x)
+        #### Output layer ####
+        if outermost_linear:
+            self.net.append(nn.Linear(hidden_features, out_features))
+        else:
+            self.net.append(nn.Linear(hidden_features, out_features))
+            self.net.append(nn.ReLU())
 
-                if retain_grad:
-                    x.retain_grad()
-
-            activations["_".join((str(layer.__class__), "%d" % activation_count))] = x
-            activation_count += 1
-
-        return activations
+        self.net = nn.Sequential(*self.net)
