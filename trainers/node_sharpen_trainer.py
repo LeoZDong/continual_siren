@@ -18,7 +18,6 @@ class NodeSharpenTrainer(SimpleTrainer):
     def __init__(self, cfg: DictConfig, **kwargs) -> None:
         super().__init__(cfg, **kwargs)
         self.sharpen_ratio = cfg.trainer.sharpen_ratio
-        self.sharpen_factor = cfg.trainer.sharpen_factor
         self.sharpen_optimizer = instantiate(
             self.cfg.trainer.sharpen_optimizer, params=self.siren.parameters()
         )
