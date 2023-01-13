@@ -22,7 +22,7 @@ class NodeSharpenTrainer(SimpleTrainer):
             self.cfg.trainer.sharpen_optimizer, params=self.siren.parameters()
         )
         self.which_layers_to_sharpen = self.cfg.trainer.which_layers_to_sharpen
-        self.sharpen_on_full_grid = self.cfg.trainer.sharpen_on_full_grid
+        self.sharpen_on_grid = self.cfg.trainer.sharpen_on_grid
 
     def train(self) -> None:
         # Prepare data:
@@ -41,8 +41,25 @@ class NodeSharpenTrainer(SimpleTrainer):
             )
 
             #### Node sharpening phase ####
-            if self.sharpen_on_full_grid:
+            if self.sharpen_on_grid == "full":
                 self.maybe_sharpen(self.dataset.full_coords.to(self.device))
+            elif self.sharpen_on_grid.startswith(
+                "backward"
+            ) or self.sharpen_on_grid.startswith("forward"):
+                grid = []
+                for i, coords in enumerate(self.dataset.coords_regions):
+                    if self.sharpen_on_grid.startswith("backward"):
+                        if i < self.dataset.cur_region:
+                            grid.append(coords)
+                    else:
+                        if i > self.dataset.cur_region:
+                            grid.append(coords)
+
+                if self.sharpen_on_grid.endswith("_eq"):
+                    grid.append(self.dataset.coords)
+
+                if len(grid):
+                    self.maybe_sharpen(torch.concat(grid, dim=0).to(self.device))
             else:
                 self.maybe_sharpen(model_input)
 
