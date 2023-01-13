@@ -11,5 +11,5 @@ sharpen_optimizer:
 
 sharpen_ratio: log
 which_layers_to_sharpen: [0]
-sharpen_every_steps: 50
-sharpen_on_grid: current
+sharpen_every_steps: 5
+sharpen_on_grid: full
