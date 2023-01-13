@@ -6,10 +6,10 @@ _recursive_: false
 
 sharpen_optimizer:
   _target_: torch.optim.Adam
-  lr: 1e-4
+  lr: 2e-5
   weight_decay: 0
 
 sharpen_ratio: log
-sharpen_factor: 0.2
 which_layers_to_sharpen: [0]
 sharpen_every_steps: 50
+sharpen_on_full_grid: false

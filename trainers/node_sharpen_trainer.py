@@ -23,6 +23,7 @@ class NodeSharpenTrainer(SimpleTrainer):
             self.cfg.trainer.sharpen_optimizer, params=self.siren.parameters()
         )
         self.which_layers_to_sharpen = self.cfg.trainer.which_layers_to_sharpen
+        self.sharpen_on_full_grid = self.cfg.trainer.sharpen_on_full_grid
 
     def train(self) -> None:
         # Prepare data:
@@ -41,7 +42,10 @@ class NodeSharpenTrainer(SimpleTrainer):
             )
 
             #### Node sharpening phase ####
-            self.maybe_sharpen(model_input)
+            if self.sharpen_on_full_grid:
+                self.maybe_sharpen(self.dataset.full_coords.to(self.device))
+            else:
+                self.maybe_sharpen(model_input)
 
             #### Signal fitting phase ####
             model_output, coords = self.siren(model_input)
@@ -99,13 +103,9 @@ class NodeSharpenTrainer(SimpleTrainer):
                 idx_blunt = nodes_sorted[:, num_to_sharpen:]
 
                 # We want the magnitude of `idx_sharpen` to be close to 1
-                sharpen_loss = self.sharpen_factor * (
-                    (1 - torch.gather(layer, 1, idx_sharpen)).square().sum()
-                )
+                sharpen_loss = (1 - torch.gather(layer, 1, idx_sharpen)).square().mean()
                 # We want the magnitude of `idx_blunt` to be close to 0
-                blunt_loss = self.sharpen_factor * (
-                    (torch.gather(layer, 1, idx_blunt).square()).sum()
-                )
+                blunt_loss = torch.gather(layer, 1, idx_blunt).square().mean()
 
                 node_sharpening_loss += (sharpen_loss + blunt_loss) / len(
                     layers_to_sharpen
