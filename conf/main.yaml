@@ -12,3 +12,4 @@ hydra:
     dir: ${root_dir}/${exp_tag}/${now:%Y.%m.%d}/${now:%H%M%S}
   job:
     chdir: true
+seed: 0
