@@ -1,0 +1,8 @@
+defaults:
+  - simple_trainer
+
+_target_: "trainers.prune_trainer.PruneTrainer"
+_recursive_: false
+
+prune_every_steps: 25
+prune_amount: 0.05
