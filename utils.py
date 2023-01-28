@@ -1,6 +1,7 @@
 from typing import List, Tuple
 
 import numpy as np
+import torch
 from torch import nn
 from torch.nn.utils import prune
 
@@ -80,5 +81,13 @@ def apply_pruning(
 
 def prune_model(model: nn.Module, prune_amount: float, finalize_pruning: bool) -> None:
     """Prune all parameters of `model`."""
+    # Apple silicon GPU (mps) does not support prune yet. Move to CPU (may cost performance).
+    device = next(model.parameters()).device
+    if device.type == "mps":
+        model.cpu()
+
     prunable_params = get_prunable_params(model)
     apply_pruning(prunable_params, prune_amount, finalize_pruning)
+
+    if device.type == "mps":
+        model.to(device)

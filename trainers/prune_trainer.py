@@ -1,4 +1,5 @@
 import logging
+import os
 
 import torch
 from omegaconf import DictConfig
@@ -15,6 +16,11 @@ class PruneTrainer(SimpleTrainer):
 
     def __init__(self, cfg: DictConfig, **kwargs) -> None:
         super().__init__(cfg, **kwargs)
+        if self.device.type == "mps":
+            warning = "Device set to mps, which does not support pruning. Move model to CPU first before each prune. This may cost performance."
+            print(warning)
+            log.warning(warning)
+
         self.prune_amount = cfg.trainer.prune_amount
 
     def train(self) -> None:

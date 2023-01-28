@@ -21,6 +21,11 @@ class NodeSharpenTrainer(SimpleTrainer):
         # Apple silicon GPU does not support argsort operation. Allow fallback.
         os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
 
+        if self.device.type == "mps":
+            warning = "Device set to mps, which does not support argsort required in sharpening. Fallback to CPU for this operation. This may cost performance."
+            print(warning)
+            log.warning(warning)
+
         self.sharpen_ratio = cfg.trainer.sharpen_ratio
         self.sharpen_optimizer = instantiate(
             self.cfg.trainer.sharpen_optimizer, params=self.siren.parameters()
