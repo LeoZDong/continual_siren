@@ -10,7 +10,7 @@ continual: True
 l1_lambda: 0
 
 total_steps: 1000
-cuda_if_available: True
+gpu_if_available: True
 switch_region_every_steps: 250
 
 summary_every_steps: 20

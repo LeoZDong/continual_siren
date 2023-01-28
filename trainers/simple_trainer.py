@@ -29,11 +29,18 @@ class SimpleTrainer:
         self.continual = self.cfg.trainer.continual
         self.siren = instantiate(cfg.network)
         self.dataset = instantiate(cfg.data)
-        self.device = (
-            torch.device("cpu")
-            if not torch.cuda.is_available() or not cfg.trainer.cuda_if_available
-            else torch.device("cuda")
-        )
+
+        # Set device
+        if not cfg.trainer.gpu_if_available:
+            self.device = torch.device("cpu")
+        elif torch.cuda.is_available():
+            self.device = torch.device("cuda")
+        elif torch.backends.mps.is_available():
+            # GPU acceleration for Apple silicon
+            self.device = torch.device("mps")
+        else:
+            self.device = torch.device("cpu")
+        self.siren = self.siren.to(self.device)
 
         self.optimizer = instantiate(
             self.cfg.trainer.optimizer, params=self.siren.parameters()
@@ -176,10 +183,11 @@ class SimpleTrainer:
         else:
             # Look out for stop iteration
             try:
-                return next(self.dataloader_iter)
+                model_input, ground_truth = next(self.dataloader_iter)
             except StopIteration:
                 self.dataloader_iter = iter(self.dataloader)
-                return next(self.dataloader_iter)
+                model_input, ground_truth = next(self.dataloader_iter)
+            return model_input.to(self.device), ground_truth.to(self.device)
 
     def maybe_switch_region(
         self, model_input: Tensor, ground_truth: Tensor
