@@ -1,4 +1,5 @@
 import logging
+import os
 
 import numpy as np
 import torch
@@ -17,6 +18,9 @@ class NodeSharpenTrainer(SimpleTrainer):
 
     def __init__(self, cfg: DictConfig, **kwargs) -> None:
         super().__init__(cfg, **kwargs)
+        # Apple silicon GPU does not support argsort operation. Allow fallback.
+        os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
+
         self.sharpen_ratio = cfg.trainer.sharpen_ratio
         self.sharpen_optimizer = instantiate(
             self.cfg.trainer.sharpen_optimizer, params=self.siren.parameters()
