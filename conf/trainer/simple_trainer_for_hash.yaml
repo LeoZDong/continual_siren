@@ -10,6 +10,7 @@ optimizer:
 
 lr_scheduler:
   _target_: torch.optim.lr_scheduler.ExponentialLR
-  gamma: 0.999
+  # gamma: 0.999
+  gamma: 1 # No decay in continual setting
 
 gpu_if_available: False
