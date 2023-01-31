@@ -1,0 +1,13 @@
+name: "hash"
+
+_target_: "networks.HashNet"
+in_features: 2
+out_features: 3
+hidden_features: 64
+hidden_layers: 2
+outermost_linear: true
+n_levels: 16
+n_features_per_entry: 2
+log2_hashtable_size: 14
+base_resolution: 16
+finest_resolution: 512
