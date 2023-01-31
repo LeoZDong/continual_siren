@@ -72,6 +72,7 @@ class NodeSharpenTrainer(SimpleTrainer):
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step()
+            self.lr_scheduler.step()
             self.step += 1
             progress_bar.update(1)
 

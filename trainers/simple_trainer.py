@@ -45,6 +45,9 @@ class SimpleTrainer:
         self.optimizer = instantiate(
             self.cfg.trainer.optimizer, params=self.network.parameters()
         )
+        self.lr_scheduler = instantiate(
+            self.cfg.trainer.lr_scheduler, optimizer=self.optimizer
+        )
         self.l1_lambda = self.cfg.trainer.l1_lambda
 
         self._work_dir = os.getcwd()
@@ -92,6 +95,7 @@ class SimpleTrainer:
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step()
+            self.lr_scheduler.step()
             self.step += 1
             progress_bar.update(1)
 
