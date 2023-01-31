@@ -2,7 +2,7 @@ from typing import List, Tuple
 
 import numpy as np
 import torch
-from torch import nn
+from torch import Tensor, nn
 from torch.nn.utils import prune
 
 
@@ -91,3 +91,137 @@ def prune_model(model: nn.Module, prune_amount: float, finalize_pruning: bool) -
 
     if device.type == "mps":
         model.to(device)
+
+
+def get_vertex_indices(min_vertex_indices: Tensor) -> Tensor:
+    """Get vertex indices of a voxel / pixel given its "minimum" (bottom left) index.
+    For example, in 2D, if `min_vertex_indices = (0, 0)`, then the pixel indices are:
+        (0, 0), (0, 1), (1, 0), (1, 1),
+    in this order.
+    Args:
+        min_vertex_indices: (bsz, 2 or 3) Batch of minimum vertex indices.
+
+    Returns:
+        voxel_indices: (bsz, 4, 2) or (bsz, 8, 3) Batch of voxel / pixel indices.
+    """
+    device = min_vertex_indices.device
+    if min_vertex_indices.shape[1] == 2:
+        shift = torch.tensor([[[i, j] for i in [0, 1] for j in [0, 1]]], device=device)
+    else:
+        shift = torch.tensor(
+            [[[i, j, k] for i in [0, 1] for j in [0, 1] for k in [0, 1]]], device=device
+        )
+
+    return min_vertex_indices.unsqueeze(1) + shift
+
+
+def get_adjacent_vertices(
+    x: Tensor,
+    grid_min: float,
+    grid_max: float,
+    resolution: int,
+) -> Tuple[Tensor, Tensor, Tensor]:
+    """Get adjacent vertices for a batch of coordinates in a grid of some resolution.
+    In 2D, each coordinate has 4 adjacent vertices; in 3D, each coordinate has 8.
+    Args:
+        x: (bsz, 2 or 3) Batch of coordinates.
+        grid_min: Possible min value of coordinates x. This is usually -1 or 0.
+        grid_max: Possible max value of coordinates x. This is usually 1.
+        resolution: Number of pixels / voxels on each side of this grid.
+
+    Returns:
+        vertex_indices: (bsz, 4, 2) or (bsz, 8, 3) Indices of adjacent vertices.
+        min_vertex_coords: (bsz, 2 or 3) "Minimum" (bottom left) of adjacent vertices.
+        max_vertex_coords: (bsz, 2 or 3) "Maximum" (top right) of adjacent vertices.
+        NOTE: min_vertex_coord and max_vertex_coord are useful for subsequent interpolation.
+    """
+    grid_size = grid_max - grid_min
+    # For 2D, this refers to pixel size
+    voxel_size = grid_size / resolution
+
+    # NOTE: In InstantNGP paper, the equation is floor(x * resolution) because x is
+    # assumed to be in [0, 1]. If x is in [-1, 1], need to shift and scale it first.
+    min_vertex_indices = torch.floor(((x - grid_min) / grid_size) * resolution).int()
+    # max_vertex_indices = torch.ceil(((x - grid_min) / grid_size) * resolution).int()
+    max_vertex_indices = min_vertex_indices + 1
+
+    # Get vertex indices of the surrounding pixel / voxel
+    vertex_indices = get_vertex_indices(min_vertex_indices)
+
+    # Recover coordinates of min / max vertices from indices
+    min_vertex_coords = min_vertex_indices * voxel_size + grid_min
+    max_vertex_coords = max_vertex_indices * voxel_size + grid_min
+
+    return vertex_indices, min_vertex_coords, max_vertex_coords
+
+
+def linear_interpolate(
+    x: Tensor,
+    min_vertex_coords: Tensor,
+    max_vertex_coords: Tensor,
+    vertex_values: Tensor,
+) -> Tensor:
+    """Linear interpolation for either 2D (bilinear) or 3D (trilinear).
+    Args:
+        x: (bsz, 2 or 3) Batch of coordinates to interpolate.
+        min_vertex_coords: (bsz, 2 or 3) "Minimum" (bottom left) coordinates of vertices
+            adjacent to `x`.
+        max_vertex_coords: (bsz, 2 or 3) "Maximum" (top right) coordinates of vertices
+            adjacent to `x`.
+        vertex_values: (bsz, 4, dim) or (bsz, 8, dim) Values of adjacent vertices to interpolate.
+
+    Returns:
+        (bsz, dim): Interpolated values for coordinates `x`.
+    """
+    if x.shape[1] == 2:
+        return linear_interpolate_2D(
+            x, min_vertex_coords, max_vertex_coords, vertex_values
+        )
+    else:
+        return linear_interpolate_3D(
+            x, min_vertex_coords, max_vertex_coords, vertex_values
+        )
+
+
+def linear_interpolate_2D(
+    x: Tensor,
+    min_vertex_coords: Tensor,
+    max_vertex_coords: Tensor,
+    vertex_values: Tensor,
+) -> Tensor:
+    """Bilineaer interpolation.
+    From the figure given in https://en.wikipedia.org/wiki/Bilinear_interpolation,
+    vertices in `vertex_values` are ordered as:
+        [Q11, Q12, Q21, Q22]
+    """
+    weights_left = (x - min_vertex_coords) / (max_vertex_coords - min_vertex_coords)
+    weights_right = (max_vertex_coords - x) / (max_vertex_coords - min_vertex_coords)
+
+    # Interpolate along the first axis
+    c0 = (
+        weights_right[:, 0, None] * vertex_values[:, 0, :]
+        + weights_left[:, 0, None] * vertex_values[:, 2, :]
+    )
+    c1 = (
+        weights_right[:, 0, None] * vertex_values[:, 1, :]
+        + weights_left[:, 0, None] * vertex_values[:, 3, :]
+    )
+
+    # Interpolate along the second axis
+    c = weights_right[:, 1, None] * c0 + weights_left[:, 1, None] * c1
+
+    return c
+
+
+def linear_interpolate_3D(
+    x: Tensor,
+    min_vertex_coords: Tensor,
+    max_vertex_coords: Tensor,
+    vertex_values: Tensor,
+) -> Tensor:
+    """Trilinear interpolation.
+    From the figure given in https://en.wikipedia.org/wiki/Trilinear_interpolation,
+    vertices in `vertex_values` are ordered as:
+        [c000, c001, c010, c011, c100, c101, c110, c111]
+    """
+    raise NotImplementedError
