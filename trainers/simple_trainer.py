@@ -27,7 +27,7 @@ class SimpleTrainer:
     def __init__(self, cfg: DictConfig, **kwargs):
         self.cfg = cfg
         self.continual = self.cfg.trainer.continual
-        self.siren = instantiate(cfg.network)
+        self.network = instantiate(cfg.network)
         self.dataset = instantiate(cfg.data)
 
         # Set device
@@ -40,10 +40,10 @@ class SimpleTrainer:
             self.device = torch.device("mps")
         else:
             self.device = torch.device("cpu")
-        self.siren = self.siren.to(self.device)
+        self.network = self.network.to(self.device)
 
         self.optimizer = instantiate(
-            self.cfg.trainer.optimizer, params=self.siren.parameters()
+            self.cfg.trainer.optimizer, params=self.network.parameters()
         )
         self.l1_lambda = self.cfg.trainer.l1_lambda
 
@@ -77,14 +77,14 @@ class SimpleTrainer:
                 model_input, ground_truth
             )
 
-            model_output, coords = self.siren(model_input)
+            model_output, coords = self.network(model_input)
             loss = self.loss(model_output, ground_truth)
             self.maybe_log(loss)
 
             # L1 penalty for weight sparsity
             if self.l1_lambda != 0:
                 l1_norm = sum(
-                    torch.norm(param, p=1) for param in self.siren.parameters()
+                    torch.norm(param, p=1) for param in self.network.parameters()
                 )
                 loss += self.l1_lambda * l1_norm
 
@@ -106,7 +106,7 @@ class SimpleTrainer:
         eval_coords: Union[str, int],
         output_img: bool = True,
     ) -> Tuple[Optional[float], Optional[Tensor], Optional[Tensor]]:
-        """Evaluate the current `self.siren` model.
+        """Evaluate the current `self.network` model.
         Args:
             eval_coords: If 'full', eval on the entire coordinate grid. If int, eval on
                 the specified region index. If 'current', eval on the current region.
@@ -118,7 +118,7 @@ class SimpleTrainer:
                 `eval_coords` as RGB tensor.
             ground_truth (side_length, side_length, 3): Ground truth image for comparison.
         """
-        self.siren.eval()
+        self.network.eval()
 
         # Pick the specified coordinate grid to evaluate on
         if eval_coords == "current":
@@ -137,10 +137,10 @@ class SimpleTrainer:
                 self.dataset.pixels_regions[eval_coords].to(self.device),
             )
 
-        model_output = self.siren(model_input)[0]
+        model_output = self.network(model_input)[0]
         eval_loss = self.loss(model_output, ground_truth).item()
 
-        self.siren.train()
+        self.network.train()
 
         if not output_img:
             return eval_loss, None, None
@@ -310,7 +310,7 @@ class SimpleTrainer:
         torch.save(
             {
                 "step": self.step,
-                "model_state_dict": self.siren.state_dict(),
+                "model_state_dict": self.network.state_dict(),
                 "optimizer_state_dict": self.optimizer.state_dict(),
                 "loss": loss.item(),
             },
