@@ -22,3 +22,5 @@ switch_region_every_steps: 250
 summary_every_steps: 20
 eval_every_steps: 20
 checkpoint_every_steps: 250
+
+load_ckpt_path: null

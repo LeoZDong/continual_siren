@@ -6,7 +6,7 @@ from typing import Optional, Tuple, Union
 import numpy as np
 import torch
 import torchvision
-from hydra.utils import instantiate
+from hydra.utils import get_original_cwd, instantiate
 from omegaconf import DictConfig
 from torch import Tensor
 from torch.utils import data
@@ -54,6 +54,14 @@ class SimpleTrainer:
         self._tb_writer = SummaryWriter(self._work_dir)
         self._checkpoint_dir = os.path.join(os.getcwd(), "ckpt")
         os.mkdir(self._checkpoint_dir)
+
+        # Load checkpoint
+        if self.cfg.trainer.load_ckpt_path is not None:
+            path = os.path.join(get_original_cwd(), self.cfg.trainer.load_ckpt_path)
+            ckpt = torch.load(path)
+            self.network.load_state_dict(ckpt["model_state_dict"])
+            self.optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+            # Note that we still keep self.step at 0 and do not load it
 
         # Only used in non-continual setting: randomly sample points from the full grid
         # Each "batch" has the same number of points as *one* region in the continual case.
