@@ -291,16 +291,28 @@ class SimpleTrainer:
             log.info(f"step={self.step}, eval_psnr_full={round(psnr_full, 5)}")
 
         if self.is_final_step(self.step + 1):
-            # Save image output in final step
-            eval_loss, full_img_out, full_gt_img = self.eval(
+            eval_loss_full, full_img_out, full_gt_img = self.eval(
                 eval_coords="full", output_img=True
             )
+
+            # Save image output in final step
             torchvision.utils.save_image(
                 full_img_out, os.path.join(self._work_dir, "full_img_out.png")
             )
             torchvision.utils.save_image(
                 full_gt_img, os.path.join(self._work_dir, "full_gt_img.png")
             )
+
+            # Record final performance in file
+            f = open("final_result.txt", "w")
+            f.write(f"psnr_full={mse2psnr(eval_loss_full)}\n")
+            regions_write = ""
+            for region in np.arange(self.dataset.num_regions):
+                eval_loss = self.eval(eval_coords=region, output_img=False)[0]
+                regions_write += f"{mse2psnr(eval_loss)}\t"
+            f.write("psnr_regions:\n")
+            f.write(regions_write)
+            f.close()
 
     def maybe_save_checkpoint(self, loss: Tensor) -> None:
         if self.is_final_step(self.step):
