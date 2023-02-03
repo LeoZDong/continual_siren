@@ -11,7 +11,7 @@ handlers:
   file:
     class: logging.FileHandler
     formatter: simple
-    filename: main .log
+    filename: main.log
 root:
   # handlers: [console] # Uncomment to display log in console only
   handlers: [file]
