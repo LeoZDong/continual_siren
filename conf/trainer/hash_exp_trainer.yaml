@@ -1,0 +1,9 @@
+defaults:
+  - simple_trainer_for_hash
+
+_target_: "trainers.hash_exp_trainer.HashExpTrainer"
+_recursive_: false
+
+load_ckpt_path: exp/hash/hash_res512/2023.01.30/200618/ckpt/final.pt
+freeze_hash: false
+freeze_mlp: true
