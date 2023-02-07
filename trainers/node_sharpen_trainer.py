@@ -28,7 +28,7 @@ class NodeSharpenTrainer(SimpleTrainer):
 
         self.sharpen_ratio = cfg.trainer.sharpen_ratio
         self.sharpen_optimizer = instantiate(
-            self.cfg.trainer.sharpen_optimizer, params=self.siren.parameters()
+            self.cfg.trainer.sharpen_optimizer, params=self.network.parameters()
         )
         self.which_layers_to_sharpen = self.cfg.trainer.which_layers_to_sharpen
         self.sharpen_on_grid = self.cfg.trainer.sharpen_on_grid
@@ -56,13 +56,13 @@ class NodeSharpenTrainer(SimpleTrainer):
                 self.maybe_sharpen(model_input)
 
             #### Signal fitting phase ####
-            model_output, coords = self.siren(model_input)
+            model_output, coords = self.network(model_input)
             loss = self.loss(model_output, ground_truth)
 
             # L1 penalty for weight sparsity
             if self.l1_lambda != 0:
                 l1_norm = sum(
-                    torch.norm(param, p=1) for param in self.siren.parameters()
+                    torch.norm(param, p=1) for param in self.network.parameters()
                 )
                 loss += self.l1_lambda * l1_norm
 
@@ -85,7 +85,7 @@ class NodeSharpenTrainer(SimpleTrainer):
         if self.step % self.cfg.trainer.sharpen_every_steps == 0:
             log.info(f"Sharpening at step {self.step}...")
 
-            activations = self.siren.forward_with_activations(
+            activations = self.network.forward_with_activations(
                 model_input, retain_grad=False, include_pre_nonlin=False
             )
             # Output layer has tag `len(layers_to_sharpen) - 2` because we exclude `input`

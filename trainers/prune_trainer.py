@@ -43,13 +43,13 @@ class PruneTrainer(SimpleTrainer):
             self.maybe_prune()
 
             #### Signal fitting phase ####
-            model_output, coords = self.siren(model_input)
+            model_output, coords = self.network(model_input)
             loss = self.loss(model_output, ground_truth)
 
             # L1 penalty for weight sparsity
             if self.l1_lambda != 0:
                 l1_norm = sum(
-                    torch.norm(param, p=1) for param in self.siren.parameters()
+                    torch.norm(param, p=1) for param in self.network.parameters()
                 )
                 loss += self.l1_lambda * l1_norm
 
@@ -71,4 +71,4 @@ class PruneTrainer(SimpleTrainer):
     def maybe_prune(self) -> None:
         if self.step % self.cfg.trainer.prune_every_steps == 0:
             log.info(f"Pruning at step {self.step}...")
-            prune_model(self.siren, self.prune_amount, finalize_pruning=True)
+            prune_model(self.network, self.prune_amount, finalize_pruning=True)

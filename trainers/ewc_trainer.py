@@ -22,7 +22,7 @@ class EWCTrainer(RegularizeTrainer):
         self, ref_params: Dict[str, Tensor], importance: Dict[str, Tensor]
     ) -> Tensor:
         """See base class for description."""
-        model_params = dict(self.siren.named_parameters())
+        model_params = dict(self.network.named_parameters())
 
         reg_loss = 0
         for name in ref_params.keys():
@@ -57,14 +57,14 @@ class EWCTrainer(RegularizeTrainer):
             model_input: Input coordinates of the previous region.
             ground_truth: Pixel values of the previous region.
         """
-        model_output = self.siren(model_input)[0]
+        model_output = self.network(model_input)[0]
 
         loss = self.loss(model_output, ground_truth, regularize=False)
-        self.siren.zero_grad()
+        self.network.zero_grad()
         loss.backward()
 
         importance = {}
-        for name, param in self.siren.named_parameters():
+        for name, param in self.network.named_parameters():
             if param.requires_grad:
                 importance[name] = param.grad**2
 
