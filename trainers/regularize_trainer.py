@@ -29,7 +29,7 @@ class RegularizeTrainer(SimpleTrainer):
         """Set the current model as next reference model."""
         cur_model = {
             name: param.clone().detach()
-            for name, param in self.siren.named_parameters()
+            for name, param in self.network.named_parameters()
             if param.requires_grad
         }
 
