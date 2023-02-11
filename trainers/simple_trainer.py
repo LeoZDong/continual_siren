@@ -92,13 +92,6 @@ class SimpleTrainer:
             loss = self.loss(model_output, ground_truth)
             self.maybe_log(loss)
 
-            # L1 penalty for weight sparsity
-            if self.l1_lambda != 0:
-                l1_norm = sum(
-                    torch.norm(param, p=1) for param in self.network.parameters()
-                )
-                loss += self.l1_lambda * l1_norm
-
             self.maybe_eval_and_log()
             self.optimizer.zero_grad()
             loss.backward()
@@ -125,7 +118,7 @@ class SimpleTrainer:
             output_img: Whether to return model output and ground truth as RGB image.
 
         Returns:
-            eval_losses: Evaluation MSE loss on the specified `eval_coords`.
+            eval_mse: Evaluation MSE loss on the specified `eval_coords`.
             img_out (side_length, side_length, 3): Model output for the specified
                 `eval_coords` as RGB tensor.
             ground_truth (side_length, side_length, 3): Ground truth image for comparison.
@@ -150,12 +143,12 @@ class SimpleTrainer:
             )
 
         model_output = self.network(model_input)[0]
-        eval_loss = self.loss(model_output, ground_truth).item()
+        eval_mse = self.mse_loss(model_output, ground_truth).item()
 
         self.network.train()
 
         if not output_img:
-            return eval_loss, None, None
+            return eval_mse, None, None
 
         # Recover spatial dimension for visualization
         side_length = int(math.sqrt(model_output.shape[0]))
@@ -175,11 +168,20 @@ class SimpleTrainer:
         # Clamp image in [0, 1] for visualization
         img_out = torch.clip(img_out, 0, 1)
 
-        return eval_loss, img_out, gt_img_out
+        return eval_mse, img_out, gt_img_out
 
-    def loss(self, model_output: Tensor, ground_truth: Tensor, **kwargs) -> Tensor:
+    def mse_loss(self, model_output: Tensor, ground_truth: Tensor) -> Tensor:
         """Calculate MSE loss."""
         return ((model_output - ground_truth) ** 2).mean()
+
+    def loss(self, model_output: Tensor, ground_truth: Tensor, **kwargs) -> Tensor:
+        """Calculate overall loss, including any regularization loss."""
+        loss = self.mse_loss(model_output, ground_truth)
+        # L1 penalty for weight sparsity
+        if self.l1_lambda != 0:
+            l1_norm = sum(torch.norm(param, p=1) for param in self.network.parameters())
+            loss += self.l1_lambda * l1_norm
+        return loss
 
     def get_next_step_data(
         self, model_input: Tensor, ground_truth: Tensor
@@ -233,27 +235,17 @@ class SimpleTrainer:
                 scalar_value=loss.item(),
                 global_step=self.step,
             )
-
-            # FIXME: With EWC and other regularization, `loss` is not MSE loss, so the
-            # PSNR calculation will be off!!
-            psnr = mse2psnr(loss.item())
-            self._tb_writer.add_scalar(
-                tag=f"train/psnr_on_cur_region",
-                scalar_value=psnr,
-                global_step=self.step,
-            )
-
             log.info(f"step={self.step}, train_loss={round(loss.item(), 5)}")
 
     def maybe_eval_and_log(self) -> None:
         """Evaluate and log evaluation summary if appropriate."""
         if self.step % self.cfg.trainer.eval_every_steps == 0:
             # Evaluate on the entire image
-            eval_loss_full, full_img_out, full_gt_img = self.eval(
+            eval_mse_full, full_img_out, full_gt_img = self.eval(
                 eval_coords="full", output_img=True
             )
             # Log evaluation loss for the full image
-            psnr_full = mse2psnr(eval_loss_full)
+            psnr_full = mse2psnr(eval_mse_full)
             self._tb_writer.add_scalar(
                 tag="eval/psnr_on_full_img",
                 scalar_value=psnr_full,
@@ -262,14 +254,14 @@ class SimpleTrainer:
 
             # Evaluate on each region individually
             regions = np.arange(self.dataset.num_regions)
-            eval_loss_backward = []
+            eval_mse_backward = []
             for region in regions:
-                eval_loss = self.eval(eval_coords=region, output_img=False)[0]
+                eval_mse = self.eval(eval_coords=region, output_img=False)[0]
                 if region < self.dataset.cur_region:
-                    eval_loss_backward.append(eval_loss)
+                    eval_mse_backward.append(eval_mse)
 
                 # Log evaluation loss for each region
-                psnr = mse2psnr(eval_loss)
+                psnr = mse2psnr(eval_mse)
                 self._tb_writer.add_scalar(
                     tag=f"eval/psnr_on_region{region}",
                     scalar_value=psnr,
@@ -277,9 +269,9 @@ class SimpleTrainer:
                 )
 
             # Log evaluation loss for backward regions
-            if self.continual and len(eval_loss_backward) > 0:
-                eval_loss_backward = np.mean(eval_loss_backward)
-                psnr_backward = mse2psnr(eval_loss_backward)
+            if self.continual and len(eval_mse_backward) > 0:
+                eval_mse_backward = np.mean(eval_mse_backward)
+                psnr_backward = mse2psnr(eval_mse_backward)
                 self._tb_writer.add_scalar(
                     tag="eval/psnr_on_backward_regions",
                     scalar_value=psnr_backward,
@@ -299,7 +291,7 @@ class SimpleTrainer:
             log.info(f"step={self.step}, eval_psnr_full={round(psnr_full, 5)}")
 
         if self.is_final_step(self.step + 1):
-            eval_loss_full, full_img_out, full_gt_img = self.eval(
+            eval_mse_full, full_img_out, full_gt_img = self.eval(
                 eval_coords="full", output_img=True
             )
 
@@ -313,11 +305,11 @@ class SimpleTrainer:
 
             # Record final performance in file
             f = open("final_result.txt", "w")
-            f.write(f"psnr_full={mse2psnr(eval_loss_full)}\n")
+            f.write(f"psnr_full={mse2psnr(eval_mse_full)}\n")
             regions_write = ""
             for region in np.arange(self.dataset.num_regions):
-                eval_loss = self.eval(eval_coords=region, output_img=False)[0]
-                regions_write += f"{mse2psnr(eval_loss)}\t"
+                eval_mse = self.eval(eval_coords=region, output_img=False)[0]
+                regions_write += f"{mse2psnr(eval_mse)}\t"
             f.write("psnr_regions:\n")
             f.write(regions_write)
             f.close()
