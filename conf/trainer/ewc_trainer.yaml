@@ -4,4 +4,4 @@ defaults:
 _target_: "trainers.ewc_trainer.EWCTrainer"
 _recursive_: false
 
-reg_coef: 100
+reg_coef: 1e9
