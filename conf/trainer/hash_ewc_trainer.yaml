@@ -1,0 +1,8 @@
+defaults:
+  - ewc_trainer
+  - simple_trainer_for_hash
+
+_target_: "trainers.hash_ewc_trainer.HashEWCTrainer"
+
+reg_coef: 1e9
+reg_exclude_param_names: []
