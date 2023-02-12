@@ -30,6 +30,12 @@ def get_module_names(model: nn.Module) -> List[str]:
         # e.g. If param name is 'net.0.linear.weight', then module name is 'net.0.linear'
         name = ".".join(param_name.split(".")[:-1])
         module_names.append(name)
+
+    # This would result in duplicate module names, e.g. net.0.linear.weight and
+    # net.0.linear.bias would both append module name `net.0.linear`!
+    # Remove duplicates
+    module_names = sorted(set(module_names))
+
     return module_names
 
 

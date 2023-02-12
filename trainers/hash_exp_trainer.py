@@ -1,5 +1,6 @@
 import logging
 
+from hydra.utils import instantiate
 from omegaconf import DictConfig
 from torch import nn
 
@@ -25,6 +26,9 @@ class HashExpTrainer(SimpleTrainer):
         #### Freeze part of the network and re-initialize the other ####
         module_names = utils.get_module_names(self.network)
         named_modules_dict = dict(self.network.named_modules())
+
+        trainable_params = []
+
         for name in module_names:
             module = named_modules_dict[name]
             if self.cfg.trainer.freeze_hash:
@@ -36,6 +40,8 @@ class HashExpTrainer(SimpleTrainer):
                     # Re-initialize MLP
                     module.reset_parameters()
                     nn.init.xavier_uniform_(module.weight)
+                    trainable_params.append(module.weight)
+                    trainable_params.append(module.bias)
             elif self.cfg.trainer.freeze_mlp:
                 if name.startswith("net"):
                     # Freeze MLP
@@ -46,6 +52,15 @@ class HashExpTrainer(SimpleTrainer):
                 else:
                     # Re-initialize hash encoding
                     nn.init.uniform_(module.weight, a=-1e-4, b=1e-4)
+                    trainable_params.append(module.weight)
+
+        # Re-initialize optimizer to contain only the trainable parameters
+        self.optimizer = instantiate(
+            self.cfg.trainer.optimizer, params=trainable_params
+        )
+        self.lr_scheduler = instantiate(
+            self.cfg.trainer.lr_scheduler, optimizer=self.optimizer
+        )
 
     def maybe_eval_and_log(self) -> None:
         super().maybe_eval_and_log()
@@ -59,6 +74,10 @@ class HashExpTrainer(SimpleTrainer):
                     frozen_param_sum += param.sum().item()
                 elif self.cfg.trainer.freeze_mlp and name.startswith("net"):
                     frozen_param_sum += param.sum().item()
-            assert (
-                frozen_param_sum == self.frozen_param_sum
-            ), "Frozen parameters before and after training have changed!"
+            try:
+                assert (
+                    frozen_param_sum == self.frozen_param_sum
+                ), f"Frozen parameters before and after training have changed! Before: {self.frozen_param_sum}, after: {frozen_param_sum}"
+            except AssertionError as e:
+                log.error(f"Assertion error: {str(e)}")
+                raise
