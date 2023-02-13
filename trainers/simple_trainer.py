@@ -55,6 +55,8 @@ class SimpleTrainer:
         self._checkpoint_dir = os.path.join(os.getcwd(), "ckpt")
         os.mkdir(self._checkpoint_dir)
 
+        self.step = 0
+
         # Load checkpoint
         if self.cfg.trainer.load_ckpt_path is not None:
             path = os.path.join(get_original_cwd(), self.cfg.trainer.load_ckpt_path)
@@ -81,7 +83,6 @@ class SimpleTrainer:
             self.device
         )
 
-        self.step = 0
         progress_bar = tqdm(total=self.cfg.trainer.total_steps)
         while self.step < self.cfg.trainer.total_steps:
             model_input, ground_truth = self.get_next_step_data(
