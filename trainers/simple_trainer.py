@@ -93,13 +93,15 @@ class SimpleTrainer:
             loss = self.loss(model_output, ground_truth)
             self.maybe_log(loss)
 
-            self.maybe_eval_and_log()
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step()
             self.lr_scheduler.step()
             self.step += 1
             progress_bar.update(1)
+
+            # Evaluate
+            self.maybe_eval_and_log()
 
             # Save checkpoint
             self.maybe_save_checkpoint(loss)
@@ -291,7 +293,7 @@ class SimpleTrainer:
             # Print eval stats
             log.info(f"step={self.step}, eval_psnr_full={round(psnr_full, 5)}")
 
-        if self.is_final_step(self.step + 1):
+        if self.is_final_step(self.step):
             eval_mse_full, full_img_out, full_gt_img = self.eval(
                 eval_coords="full", output_img=True
             )
