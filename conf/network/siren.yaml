@@ -1,6 +1,6 @@
 name: "siren"
 
-_target_: "networks.Siren"
+_target_: "networks.coordinate_networks.Siren"
 in_features: 2
 out_features: 3
 hidden_features: 256

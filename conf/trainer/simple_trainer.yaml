@@ -1,4 +1,6 @@
 _target_: "trainers.simple_trainer.SimpleTrainer"
+# This is so we don't recursively instantiate `optimizer` and others, since they need to
+# be instantiated manually inside the trainer with additional args like `params`
 _recursive_: false
 
 optimizer:

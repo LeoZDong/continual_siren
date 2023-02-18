@@ -1,6 +1,6 @@
 name: "relu"
 
-_target_: "networks.ReLUNet"
+_target_: "networks.coordinate_networks.ReLUNet"
 in_features: 2
 out_features: 3
 hidden_features: 256
