@@ -125,7 +125,7 @@ def get_adjacent_vertices(
     x: Tensor,
     grid_min: float,
     grid_max: float,
-    resolution: int,
+    vertex_resolution: int,
 ) -> Tuple[Tensor, Tensor, Tensor]:
     """Get adjacent vertices for a batch of coordinates in a grid of some resolution.
     In 2D, each coordinate has 4 adjacent vertices; in 3D, each coordinate has 8.
@@ -133,7 +133,10 @@ def get_adjacent_vertices(
         x: (bsz, 2 or 3) Batch of coordinates.
         grid_min: Possible min value of coordinates x. This is usually -1 or 0.
         grid_max: Possible max value of coordinates x. This is usually 1.
-        resolution: Number of pixels / voxels on each side of this grid.
+        vertex_resolution: Number of vertices on each side of this grid. This is
+            different from the definition in the paper (where `resolution` is the number
+            of voxels on each side), but consistent with the official CUDA implementation.
+            The number of voxels on each side is simply `resolution - 1`.
 
     Returns:
         vertex_indices: (bsz, 4, 2) or (bsz, 8, 3) Indices of adjacent vertices.
@@ -141,14 +144,24 @@ def get_adjacent_vertices(
         max_vertex_coords: (bsz, 2 or 3) "Maximum" (top right) of adjacent vertices.
         NOTE: min_vertex_coord and max_vertex_coord are useful for subsequent interpolation.
     """
+    voxel_resolution = vertex_resolution - 1
+
     grid_size = grid_max - grid_min
     # For 2D, this refers to pixel size
-    voxel_size = grid_size / resolution
+    voxel_size = grid_size / voxel_resolution
 
     # NOTE: In InstantNGP paper, the equation is floor(x * resolution) because x is
     # assumed to be in [0, 1]. If x is in [-1, 1], need to shift and scale it first.
-    min_vertex_indices = torch.floor(((x - grid_min) / grid_size) * resolution).int()
-    # max_vertex_indices = torch.ceil(((x - grid_min) / grid_size) * resolution).int()
+    min_vertex_indices = torch.floor(
+        ((x - grid_min) / grid_size) * voxel_resolution
+    ).int()
+    # Need to deal with edge case because coordinate value may be 1 in our code base,
+    # where in InstantNGP it is strictly less than 1. If coord = 1, `floor` will not
+    # round down one index, so need to manually clip min vertex index.
+    min_vertex_indices = torch.min(
+        min_vertex_indices,
+        torch.ones_like(min_vertex_indices) * (int(voxel_resolution) - 1),
+    )
     max_vertex_indices = min_vertex_indices + 1
 
     # Get vertex indices of the surrounding pixel / voxel
@@ -200,6 +213,9 @@ def linear_interpolate_2D(
     vertices in `vertex_values` are ordered as:
         [Q11, Q12, Q21, Q22]
     """
+    # TODO: We can optionally offset x by 0.5 * (max_vertex_coords - min_vertex_coord),
+    # i.e. half of the voxel size, to prevent zero gradients when we perfectly align
+    # with the grid vertices.
     weights_left = (x - min_vertex_coords) / (max_vertex_coords - min_vertex_coords)
     weights_right = (max_vertex_coords - x) / (max_vertex_coords - min_vertex_coords)
 
