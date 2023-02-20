@@ -185,6 +185,159 @@ class HashEmbeddingUnravel(HashEmbedding):
         return hash_indices
 
 
+class HashEmbeddingMRU(HashEmbeddingUnravel):
+    """Most recently (first) used (MRU) hash embedding. We maintain an MRU queue as
+    "collision candidates" in case when we have to perform a hash collision. This ensures
+    that coordinates collide with more recently trained coordinates, which alleviates
+    forgetting because colliding with "forgotten" coordinates (those trained early on)
+    leads to most interference.
+    """
+
+    def __init__(self, mru_size, **kwargs):
+        """Initialize MRU queue and other book-keeping instance variables.
+
+        Instance variables:
+            used: Dictionary that contains sets of used (trained) coordinates, one for
+                each resolution. Coordinates are represented by their linearly unraveled
+                indices. For example, `self.used[16] = {33}` for a 2-dim grid means that
+                the coordinate (1, 2) was previously trained for the 16x16 grid.
+            most_recently_used: Dictionary that contains queues of most recently used
+                coordinates, one for each resolution. As `used`, coordinates are
+                represented by their linearly unraveled indices. Newly used coordinates
+                are added to the left (front) end, and queues are cut back to a maximum
+                length of `self.mru_size` from the right (tail) end.
+            collision_target: Dictionary that contains hash indices for overflow
+                unraveled indices, which are coordinates whose unraveled indices exceed
+                the hash table size and must collide. The ith entry `index` represents
+                that the coordinate with unraveled index `(i + hashtable_size)` will
+                collide with `index` in the hash table. Initialized to -1. If the entry
+                is not -1, the collision target had been computed before, so we directly
+                use it. Else, we compute the collision target from the current MRU queue
+                (see more in `spatial_hash`) and save it to `collision_target`.
+
+        As an optimization, we only initialize these 3 instance variables for grid
+        resolutions that will result in collisions (i.e. more coordinates than hash
+        table size).
+        """
+
+        super().__init__(**kwargs)
+        self.mru_size = mru_size
+
+        # Set of used coordinates
+        self.used = {}
+        # Queue of most recently (first) used coordinates
+        self.most_recently_used = {}
+        # Computed collision targets
+        self.collision_target = {}
+
+        for resolution in self.strides.keys():
+            if np.log2(resolution**self.coord_dim) > self.log2_hashtable_size:
+                self.used[resolution] = set()
+                self.most_recently_used[resolution] = deque([])
+                self.collision_target[resolution] = -torch.ones(
+                    int(resolution**self.coord_dim - 2**self.log2_hashtable_size),
+                    dtype=torch.long,
+                )
+
+    def add_to_used(self, first_used: list, resolution: int):
+        """Add a list of hash indices to `self.used`.
+        Args:
+            first_used: List of hash indices first used.
+            resolution: Grid resolution corresponding to the hash indices.
+        """
+        self.used[resolution] = self.used[resolution].union(set(first_used))
+
+    def add_to_mru(self, indices: list, resolution: int):
+        """Add new `indices` to MRU. Pop tail if exceeds `self.mru_size`."""
+        # Populate MRU queue
+        self.most_recently_used[resolution].extendleft(indices)
+
+        # Remove tail (right) of the MRU queue
+        for _ in range(
+            max(len(self.most_recently_used[resolution]) - self.mru_size, 0)
+        ):
+            self.most_recently_used[resolution].pop()
+
+    def spatial_hash(self, vertex_indices: Tensor, resolution: int) -> Tensor:
+        """Spatial hash function for the MRU hash scheme.
+        We first unravel the d-dim coordinates into 1-dim indices.
+        For indices that do not exceed the hash table size:
+            1. They are directly used as hash indices for the hash embeddings
+            2. For the first-used indices, we add them to `used` set and MRU queue
+        For indices that exceed the hash table size:
+            1. Find the collision target. For a coordinate with unraveled index `idx`,
+               we look at entry `idx - hashtable_size` of `collision_target`. If the
+               target is not -1, we directly use the collision target as hash index.
+            2. Else, we compute spatial hash of this coordinate for a hashtale size of
+               the length of the MRU queue; denote it as `mru_index`. The hash index is
+               the value from the MRU queue at index `mru_index`. In other words, we
+               treat the MRU queue as a hash table of hash embedding indices in case
+               of a collision. We also save it as `collision_target` of this coordinate.
+        """
+        primes = [
+            1,
+            2654435761,
+            805459861,
+        ]
+
+        # Unravel d-dim coordinates into indices
+        stride = self.strides[resolution]
+        unravel_indices = (vertex_indices * stride).sum(-1)
+
+        overflow = unravel_indices >= (2**self.log2_hashtable_size)
+        overflow_size = overflow.sum()
+
+        # Add the non-overflow and first-use indices used set and MRU queue
+        if self.training and resolution in self.used.keys():
+            used = torch.tensor(list(self.used[resolution]), dtype=torch.long)
+            non_overflow_indices = unravel_indices[~overflow]
+            first_used = non_overflow_indices[
+                torch.isin(non_overflow_indices, used, invert=True)
+            ].numpy()
+            self.add_to_mru(first_used, resolution)
+            self.add_to_used(first_used, resolution)
+
+        hash_indices = unravel_indices
+
+        if overflow_size > 0:
+            collision_target_entries = (
+                unravel_indices[overflow] - 2**self.log2_hashtable_size
+            )
+
+            # Need to compute collision target for the first time
+            need_to_compute = (
+                self.collision_target[resolution][collision_target_entries] == -1
+            )
+
+            if need_to_compute.sum() > 0:
+                vertex_to_hash = vertex_indices[overflow][need_to_compute]
+                xor_result = torch.zeros_like(vertex_to_hash)[..., 0]
+                for dim in range(self.coord_dim):
+                    xor_result ^= vertex_to_hash[..., dim] * primes[dim]
+                mru_indices = xor_result % len(self.most_recently_used[resolution])
+                collision_targets = torch.tensor(self.most_recently_used[resolution])[
+                    mru_indices
+                ]
+
+                # Use newly computed collision targets
+                mask = overflow.clone()
+                mask[overflow] = need_to_compute
+                hash_indices[mask] = collision_targets
+
+                # Save newly computed collision targets
+                mask = collision_target_entries[need_to_compute]
+                self.collision_target[resolution][mask] = collision_targets
+
+            # Reuse collision targets
+            mask = overflow.clone()
+            mask[overflow] = ~need_to_compute
+            hash_indices[mask] = self.collision_target[resolution][
+                collision_target_entries
+            ][~need_to_compute]
+
+        return hash_indices
+
+
 class HashNet(nn.Module):
     """Network that uses a multi-resolution hash function as coordinate embedding."""
 

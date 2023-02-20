@@ -1,0 +1,8 @@
+name: "hash"
+
+defaults:
+  - hash
+
+hash_embedding:
+  _target_: "networks.hash_networks.HashEmbeddingMRU"
+  mru_size: 1000
