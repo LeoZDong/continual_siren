@@ -12,6 +12,7 @@ outermost_linear: true
 
 hash_embedding:
   _target_: "networks.hash_networks.HashEmbedding"
+  coord_dim: 2
   n_levels: 16
   n_features_per_entry: 2
   log2_hashtable_size: 14

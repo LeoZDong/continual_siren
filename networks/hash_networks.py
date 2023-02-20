@@ -1,9 +1,8 @@
+from collections import deque
 from typing import Tuple
 
 import numpy as np
 import torch
-from hydra.utils import instantiate
-from omegaconf import DictConfig
 from torch import Tensor, nn
 
 import utils
@@ -14,11 +13,13 @@ class HashEmbedding(nn.Module):
 
     def __init__(
         self,
+        coord_dim: int,
         n_levels: int,
         n_features_per_entry: int,
         log2_hashtable_size: int,
         base_resolution: int,
         finest_resolution: int,
+        **kwargs,
     ) -> None:
         """Initialize a hash embedding.
         Args:
@@ -35,6 +36,7 @@ class HashEmbedding(nn.Module):
                 (i.e. `N_max` in InstantNGP paper).
         """
         super().__init__()
+        self.coord_dim = coord_dim
         self.n_levels = n_levels
         self.n_features_per_entry = n_features_per_entry
         self.log2_hashtable_size = log2_hashtable_size
@@ -75,11 +77,11 @@ class HashEmbedding(nn.Module):
                 min_vertex_coords,
                 max_vertex_coords,
             ) = utils.get_adjacent_vertices(
-                x, grid_min=-1, grid_max=1, resolution=resolution
+                x, grid_min=-1, grid_max=1, vertex_resolution=resolution
             )
 
             # Query hash function and lookup table to get adjacent vertices' embeddings
-            vertex_indices_hash = self.spatial_hash(vertex_indices)
+            vertex_indices_hash = self.spatial_hash(vertex_indices, resolution)
             vertex_embeddings = self.embeddings[i](vertex_indices_hash)
 
             # Interpolate adjacent vertices' embeddings to get x's embedding
@@ -91,10 +93,12 @@ class HashEmbedding(nn.Module):
         x_embedding_multi_level = torch.cat(x_embedding_multi_level, dim=-1)
         return x_embedding_multi_level
 
-    def spatial_hash(self, vertex_indices: Tensor) -> Tensor:
+    def spatial_hash(self, vertex_indices: Tensor, resolution: int) -> Tensor:
         """Spatial hash function as defined in InstantNGP.
         Args:
             vertex_indices: (bsz, num_vertex, 2 or 3) Batch of vertex indices in 2D or 3D.
+            resolution: Current resolution of the grid (number of vertices per side).
+                Not used in this class.
 
         Returns: (bsz, num_vertex) Hash value for each vertex.
         """
@@ -116,6 +120,71 @@ class HashEmbedding(nn.Module):
         )
 
 
+class HashEmbeddingUnravel(HashEmbedding):
+    """Hash embedding where we linearly unravel the coordinate directly as hash table
+    indices. We only use the spatial hash function to compute hash indices when the
+    current grid resolution has more coordinates than the hash table size.
+
+    This is consistent with the official CUDA implementation. It is almost the same as
+    always using the spatial hash function, except we strictly have no collisions when
+    the grid size is less than the hash table size.
+
+    Empirically, this performs a bit better in both continual and non-continual settings.
+    """
+
+    def __init__(self, **kwargs):
+        """Initialize `self.strides` instance variable, which contains one `stride` for
+        each grid `resolution`. `stride` is used to linearly unravel D-dim coordinates.
+        For example, if D = 2 on a grid resolution of 16, then `stride` is [1, 16].
+        Given a 2-dim coordinate of `coord = [x, y]`, its linearly unraveled index is
+        `(coord * stride).sum() = (x + 16y)`.
+        """
+
+        super().__init__(**kwargs)
+        # Pre-compute strides at all resolution levels
+        self.strides = {}
+        for i in range(self.n_levels):
+            resolution = np.floor(
+                self.base_resolution * self.coarse_to_fine_factor**i
+            )
+            stride = torch.ones([1, 1, self.coord_dim], dtype=torch.long)
+
+            s = 1
+            for dim in range(self.coord_dim):
+                stride[..., dim] = s
+                s *= resolution
+            self.strides[resolution] = stride
+
+    def spatial_hash(self, vertex_indices: Tensor, resolution: int) -> Tensor:
+        """Spatial hash function for the unravel hash scheme. We only query the spatial
+        hash function for hash indices when the current grid `resolution` has more
+        coordinates than the hash table size. Otherwise, we linearly unravel the D-dim
+        coordinate to get the hash indices.
+        """
+        primes = [
+            1,
+            2654435761,
+            805459861,
+        ]
+
+        size = resolution**self.coord_dim
+        if np.log2(size) > self.log2_hashtable_size:
+            xor_result = torch.zeros_like(vertex_indices)[..., 0]
+            for dim in range(self.coord_dim):
+                xor_result ^= vertex_indices[..., dim] * primes[dim]
+            hash_indices = (
+                torch.tensor(
+                    (1 << self.log2_hashtable_size) - 1, device=xor_result.device
+                )
+                & xor_result
+            )
+        else:
+            stride = self.strides[resolution]
+            hash_indices = (vertex_indices * stride).sum(-1)
+
+        return hash_indices
+
+
 class HashNet(nn.Module):
     """Network that uses a multi-resolution hash function as coordinate embedding."""
 
@@ -134,13 +203,6 @@ class HashNet(nn.Module):
             hash_embedding.n_levels * hash_embedding.n_features_per_entry
         )
         self.hash_embedding = hash_embedding
-        # self.hash_embedding = HashEmbedding(
-        #     n_levels=n_levels,
-        #     n_features_per_entry=n_features_per_entry,
-        #     log2_hashtable_size=log2_hashtable_size,
-        #     base_resolution=base_resolution,
-        #     finest_resolution=finest_resolution,
-        # )
 
         self.net = []
         #### Embedding layer ####
