@@ -328,6 +328,173 @@ class HashEmbeddingMRU(HashEmbeddingUnravel):
                 if self.training:
                     mask = collision_target_entries[need_to_compute]
                     self.collision_target[resolution][mask] = collision_targets
+                    print(f"Computing new collision targets for res{resolution}")
+
+            # Reuse collision targets
+            mask = overflow.clone()
+            mask[overflow] = ~need_to_compute
+            hash_indices[mask] = self.collision_target[resolution][
+                collision_target_entries
+            ][~need_to_compute]
+
+        return hash_indices
+
+
+class HashEmbeddingMRU2(HashEmbeddingMRU):
+    def spatial_hash(self, vertex_indices: Tensor, resolution: int) -> Tensor:
+        primes = [
+            1,
+            2654435761,
+            805459861,
+        ]
+
+        grid_size = resolution**self.coord_dim
+        if np.log2(grid_size) <= self.log2_hashtable_size:
+            stride = self.strides[resolution]
+            return (vertex_indices * stride).sum(-1)
+
+        # Query the spatial hash function for all vertices
+        xor_result = torch.zeros_like(vertex_indices)[..., 0]
+        for dim in range(self.coord_dim):
+            xor_result ^= vertex_indices[..., dim] * primes[dim]
+        hash_indices = (xor_result % grid_size).long()
+
+        overflow = hash_indices >= (2**self.log2_hashtable_size)
+        overflow_size = overflow.sum()
+
+        # Add the non-overflow and first-use indices used set and MRU queue
+        if self.training and resolution in self.used.keys():
+            used = torch.tensor(list(self.used[resolution]), dtype=torch.long)
+            non_overflow_indices = hash_indices[~overflow]
+            first_used = non_overflow_indices[
+                torch.isin(non_overflow_indices, used, invert=True)
+            ].numpy()
+            self.add_to_mru(first_used, resolution)
+            self.add_to_used(first_used, resolution)
+
+        if overflow_size > 0:
+            collision_target_entries = (
+                hash_indices[overflow] - 2**self.log2_hashtable_size
+            )
+
+            # Need to compute collision target for the first time
+            need_to_compute = (
+                self.collision_target[resolution][collision_target_entries] == -1
+            )
+
+            if need_to_compute.sum() > 0:
+                mru_indices = hash_indices[overflow][need_to_compute] % len(
+                    self.most_recently_used[resolution]
+                )
+
+                collision_targets = torch.tensor(self.most_recently_used[resolution])[
+                    mru_indices
+                ]
+
+                # Use newly computed collision targets
+                mask = overflow.clone()
+                mask[overflow] = need_to_compute
+                hash_indices[mask] = collision_targets
+
+                # Save newly computed collision targets ONLY IN TRAIN MODE!
+                if self.training:
+                    mask = collision_target_entries[need_to_compute]
+                    self.collision_target[resolution][mask] = collision_targets
+
+            # Reuse collision targets
+            mask = overflow.clone()
+            mask[overflow] = ~need_to_compute
+            hash_indices[mask] = self.collision_target[resolution][
+                collision_target_entries
+            ][~need_to_compute]
+
+        return hash_indices
+
+
+class HashEmbeddingMRU3(HashEmbeddingMRU):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.grid_unravel_shuffle = {}
+        for resolution in self.strides.keys():
+            grid_size = int(resolution**self.coord_dim)
+            self.grid_unravel_shuffle[resolution] = torch.randperm(grid_size)
+
+    def spatial_hash(self, vertex_indices: Tensor, resolution: int) -> Tensor:
+        """Spatial hash function for the MRU hash scheme.
+        We first unravel the d-dim coordinates into 1-dim indices.
+        For indices that do not exceed the hash table size:
+            1. They are directly used as hash indices for the hash embeddings
+            2. For the first-used indices, we add them to `used` set and MRU queue
+        For indices that exceed the hash table size:
+            1. Find the collision target. For a coordinate with unraveled index `idx`,
+               we look at entry `idx - hashtable_size` of `collision_target`. If the
+               target is not -1, we directly use the collision target as hash index.
+            2. Else, we compute spatial hash of this coordinate for a hashtale size of
+               the length of the MRU queue; denote it as `mru_index`. The hash index is
+               the value from the MRU queue at index `mru_index`. In other words, we
+               treat the MRU queue as a hash table of hash embedding indices in case
+               of a collision. We also save it as `collision_target` of this coordinate.
+        """
+        primes = [
+            1,
+            2654435761,
+            805459861,
+        ]
+
+        # Unravel d-dim coordinates into indices
+        stride = self.strides[resolution]
+        unravel_indices = (vertex_indices * stride).sum(-1)
+
+        #### SHUFFLE ####
+        unravel_indices = self.grid_unravel_shuffle[resolution][unravel_indices]
+
+        # unravel_indices = unravel_indices[self.grid_unravel_shuffle[resolution]]
+
+        overflow = unravel_indices >= (2**self.log2_hashtable_size)
+        overflow_size = overflow.sum()
+
+        # Add the non-overflow and first-use indices used set and MRU queue
+        if self.training and resolution in self.used.keys():
+            used = torch.tensor(list(self.used[resolution]), dtype=torch.long)
+            non_overflow_indices = unravel_indices[~overflow]
+            first_used = non_overflow_indices[
+                torch.isin(non_overflow_indices, used, invert=True)
+            ].numpy()
+            self.add_to_mru(first_used, resolution)
+            self.add_to_used(first_used, resolution)
+
+        hash_indices = unravel_indices
+
+        if overflow_size > 0:
+            collision_target_entries = (
+                unravel_indices[overflow] - 2**self.log2_hashtable_size
+            )
+
+            # Need to compute collision target for the first time
+            need_to_compute = (
+                self.collision_target[resolution][collision_target_entries] == -1
+            )
+
+            if need_to_compute.sum() > 0:
+                vertex_to_hash = vertex_indices[overflow][need_to_compute]
+                xor_result = torch.zeros_like(vertex_to_hash)[..., 0]
+                for dim in range(self.coord_dim):
+                    xor_result ^= vertex_to_hash[..., dim] * primes[dim]
+                mru_indices = xor_result % len(self.most_recently_used[resolution])
+                collision_targets = torch.tensor(self.most_recently_used[resolution])[
+                    mru_indices
+                ]
+
+                # Use newly computed collision targets
+                mask = overflow.clone()
+                mask[overflow] = need_to_compute
+                hash_indices[mask] = collision_targets
+
+                # Save newly computed collision targets ONLY IN TRAIN MODE!
+                if self.training:
+                    mask = collision_target_entries[need_to_compute]
+                    self.collision_target[resolution][mask] = collision_targets
+                    # print(f"Computing new collision targets for res{resolution}")
 
             # Reuse collision targets
             mask = overflow.clone()
