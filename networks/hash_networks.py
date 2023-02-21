@@ -214,6 +214,10 @@ class HashEmbeddingMRU(HashEmbeddingUnravel):
                 is not -1, the collision target had been computed before, so we directly
                 use it. Else, we compute the collision target from the current MRU queue
                 (see more in `spatial_hash`) and save it to `collision_target`.
+            unravel_indices_permute: Fixed permutation for the unraveled indices, one
+                for each resolution. We always permute the unraveled indices before
+                querying the collision targets, which ensures that collision targets
+                are not spatially biased.
 
         As an optimization, we only initialize these 3 instance variables for grid
         resolutions that will result in collisions (i.e. more coordinates than hash
@@ -264,7 +268,10 @@ class HashEmbeddingMRU(HashEmbeddingUnravel):
 
     def spatial_hash(self, vertex_indices: Tensor, resolution: int) -> Tensor:
         """Spatial hash function for the MRU hash scheme.
-        We first unravel the d-dim coordinates into 1-dim indices.
+        We first unravel the d-dim coordinates into 1-dim indices. We then randomly
+        permute them (permutation is fixed at initialization), which is very important
+        to ensure the collision targets are not spatially biased.
+
         For indices that do not exceed the hash table size:
             1. They are directly used as hash indices for the hash embeddings
             2. For the first-used indices, we add them to `used` set and MRU queue
