@@ -324,9 +324,10 @@ class HashEmbeddingMRU(HashEmbeddingUnravel):
                 mask[overflow] = need_to_compute
                 hash_indices[mask] = collision_targets
 
-                # Save newly computed collision targets
-                mask = collision_target_entries[need_to_compute]
-                self.collision_target[resolution][mask] = collision_targets
+                # Save newly computed collision targets ONLY IN TRAIN MODE!
+                if self.training:
+                    mask = collision_target_entries[need_to_compute]
+                    self.collision_target[resolution][mask] = collision_targets
 
             # Reuse collision targets
             mask = overflow.clone()
