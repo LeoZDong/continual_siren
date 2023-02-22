@@ -225,7 +225,7 @@ class HashEmbeddingMRU(HashEmbeddingUnravel):
         """
 
         super().__init__(**kwargs)
-        self.mru_size = mru_size
+        self.mru_size = int(mru_size)
 
         # Set of used coordinates
         self.used = {}
