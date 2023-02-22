@@ -66,7 +66,8 @@ class ImageFitting(Dataset):
             side_length: Side length of image (i.e. number of pixels on each side).
             data_split: Data split of the BSDS dataset (i.e. 'train' or 'test').
             id: ID of the single image to use.
-
+            region_simulator: Region simulator object to simulate regions that will be
+                trained sequentially under continual learning.
         """
         super().__init__()
         spatial_dim = 2
