@@ -1,0 +1,9 @@
+defaults:
+  - region_simulator: random_region_simulator
+
+_target_: "data.image_data.ImageFitting"
+_recursive_: true
+
+side_length: 256
+data_split: "test"
+id: "108005"

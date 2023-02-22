@@ -1,0 +1,5 @@
+_target_: data.region_simulators.RandomRegionSimulator
+
+num_regions: 32
+region_size_min: 0.4
+region_size_max: 0.6

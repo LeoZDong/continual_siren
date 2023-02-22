@@ -1,6 +1,9 @@
+import random
 from typing import List, Tuple
 
+import numpy as np
 import torch
+from scipy.interpolate import RegularGridInterpolator
 from torch import Tensor
 
 
@@ -92,10 +95,9 @@ class RegularRegionSimulator(RegionSimulator):
                 coords_regions.append(coords_region.reshape(-1, spatial_dim))
 
         # Optionally randomly permute the region orderings
+        permute_regions = list(range(len(pixels_regions)))
         if self.permute:
-            permute_regions = torch.randperm(len(pixels_regions))
-        else:
-            permute_regions = torch.arange(len(pixels_regions))
+            random.shuffle(permute_regions)
 
         pixels_regions_permute = []
         coords_regions_permute = []
@@ -104,3 +106,62 @@ class RegularRegionSimulator(RegionSimulator):
             coords_regions_permute.append(coords_regions[region])
 
         return pixels_regions_permute, coords_regions_permute
+
+
+class RandomRegionSimulator(RegionSimulator):
+    """Random region simulator that produces square patches of size uniformly distributed
+    in [`region_size_min`, `region_size_max`]. Coordinates inside regions are continous
+    coordinates that might not match ground-truth in `full_coords`, in which case the
+    corresponding pixel values are interpolated.
+    """
+
+    def __init__(
+        self,
+        num_regions: int,
+        region_size_min: float,
+        region_size_max: float,
+    ):
+        self.num_regions = num_regions
+        self.region_size_min = region_size_min
+        self.region_size_max = region_size_max
+
+    def simulate_regions(
+        self, full_pixels: Tensor, full_coords: Tensor
+    ) -> Tuple[List[Tensor], List[Tensor]]:
+        """See super class for documentation."""
+        pixels_regions = []
+        coords_regions = []
+
+        axes = (full_coords[:, 0, 0].numpy(), full_coords[0, :, 1].numpy())
+        interpolate = RegularGridInterpolator(
+            axes, full_pixels.numpy(), method="linear"
+        )
+
+        coords_max = full_coords.max().item()
+        coords_min = full_coords.min().item()
+        spatial_dim = full_coords.shape[-1]
+        density = full_coords.shape[0] / (coords_max - coords_min)
+
+        for _ in range(self.num_regions):
+            # Pick the size (side length) of the region
+            region_size = np.random.uniform(
+                low=self.region_size_min, high=self.region_size_max
+            )
+            # Pick the bottom left corner of the region
+            bottom_left = (
+                np.random.rand(spatial_dim) * (coords_max - coords_min - region_size)
+                + coords_min
+            )
+
+            # Randomly select coords within region and interpolate
+            num_coords = int((region_size * density) ** spatial_dim)
+            coords = np.random.uniform(
+                low=bottom_left,
+                high=bottom_left + region_size,
+                size=(num_coords, spatial_dim),
+            )
+            pixels = interpolate(coords)
+            coords_regions.append(torch.tensor(coords, dtype=full_coords.dtype))
+            pixels_regions.append(torch.tensor(pixels, dtype=full_pixels.dtype))
+
+        return pixels_regions, coords_regions

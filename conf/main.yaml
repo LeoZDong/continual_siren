@@ -1,7 +1,7 @@
 defaults:
   - _self_
   - network: siren
-  - data: single_image
+  - data: single_image_regular
   - trainer: simple_trainer
   - override hydra/job_logging: custom
 
