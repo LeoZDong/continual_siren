@@ -1,4 +1,4 @@
-_target_: data.RegularRegionSimulator
+_target_: data.region_simulators.RegularRegionSimulator
 divide_side_n: 2
 overlap: 0
 permute: false
