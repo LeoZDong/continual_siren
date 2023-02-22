@@ -1,5 +1,9 @@
+defaults:
+  - region_simulator: regular_region_simulator
+
 _target_: data.ImageFitting
+_recursive_: true
+
 side_length: 256
 data_split: "test"
 id: "108005"
-divide_side_n: 2

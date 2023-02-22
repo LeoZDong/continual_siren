@@ -1,0 +1,4 @@
+_target_: data.RegularRegionSimulator
+divide_side_n: 2
+overlap: 0
+permute: false
