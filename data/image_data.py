@@ -24,8 +24,8 @@ def get_mgrid(side_length: int, dim: int = 2) -> Tensor:
     Returns:
         (side_length, side_length, dim) A tensor of `dim`-dimensional coordinates.
     """
-    tensors = tuple(dim * [torch.linspace(-1, 1, steps=side_length)])
-    mgrid = torch.stack(torch.meshgrid(*tensors, indexing="ij"), dim=-1)
+    axes = tuple(dim * [torch.linspace(-1, 1, steps=side_length)])
+    mgrid = torch.stack(torch.meshgrid(*axes, indexing="ij"), dim=-1)
     return mgrid
 
 
