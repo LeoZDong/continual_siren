@@ -11,9 +11,15 @@ from trainers.simple_trainer import SimpleTrainer
 log = logging.getLogger(__name__)
 
 
-class HashExpTrainer(SimpleTrainer):
-    """Trainer to conduct experiments on HashNet, such as freezing the hash encoding
-    loaded from a well-trained network and train the small MLP from scratch.
+class HashFreezeTrainer(SimpleTrainer):
+    """Trainer for HashNet that freezes one part (MLP or hash encoding) and re-intialize
+    the other to train from scratch.
+
+    This is useful for conducting experiments such as loading and freezing a perfectly
+    trained MLP and training the hash encoding.
+
+    Or it is simply good for mitigating forgetting in the MLP by freezing it, since most
+    of the training happens in the hash encoding.
     """
 
     def __init__(self, cfg: DictConfig, **kwargs) -> None:
@@ -108,11 +114,19 @@ class HashExpTrainer(SimpleTrainer):
         # Probably remove in the future, but a cheap verification for now
         if self.is_final_step(self.step + 1):
             frozen_param_sum = 0
-            for name, param in self.network.named_parameters():
-                if self.cfg.trainer.freeze_hash and name.startswith("hash_embedding"):
-                    frozen_param_sum += param.sum().item()
-                elif self.cfg.trainer.freeze_mlp and name.startswith("net"):
-                    frozen_param_sum += param.sum().item()
+
+            module_names = utils.get_module_names(self.network)
+            named_modules_dict = dict(self.network.named_modules())
+            for name in module_names:
+                module = named_modules_dict[name]
+                if self.cfg.trainer.freeze_hash and isinstance(module, nn.Embedding):
+                    # Freeze hash encoding
+                    frozen_param_sum += module.weight.sum().item()
+                elif self.cfg.trainer.freeze_mlp and isinstance(module, nn.Linear):
+                    # Freeze MLP
+                    frozen_param_sum += module.weight.sum().item()
+                    frozen_param_sum += module.bias.sum().item()
+
             try:
                 assert (
                     frozen_param_sum == self.frozen_param_sum
