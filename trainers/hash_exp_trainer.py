@@ -57,7 +57,7 @@ class HashExpTrainer(SimpleTrainer):
         for name in module_names:
             module = named_modules_dict[name]
             if self.cfg.trainer.freeze_hash:
-                if name.startswith("hash_embedding"):
+                if isinstance(module, nn.Embedding):
                     # Freeze hash encoding
                     module.weight.requires_grad = False
                     self.frozen_param_sum += module.weight.sum().item()
@@ -69,7 +69,7 @@ class HashExpTrainer(SimpleTrainer):
                     trainable_params.append(module.weight)
                     trainable_params.append(module.bias)
             elif self.cfg.trainer.freeze_mlp:
-                if name.startswith("net"):
+                if isinstance(module, nn.Linear):
                     # Freeze MLP
                     module.weight.requires_grad = False
                     module.bias.requires_grad = False
