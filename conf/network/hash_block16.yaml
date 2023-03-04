@@ -1,0 +1,18 @@
+name: "hash_block"
+
+defaults:
+  - hash_block4
+
+# 51 roughly gives 1/4 the MLP size
+# 40 roughly gives 1/16 the MLP size
+hidden_features: 40
+num_blocks_per_side: 4
+
+hash_embedding:
+  _target_: "networks.hash_networks.HashEmbeddingUnravelBlock"
+  log2_hashtable_size: 10
+  # While resolution should really be 1/4 to match the "overall" grid resolution of the
+  # whole image, making resolution lower simply didn't seem to work. Maybe resolution
+  # is less image / data dependent but model / network dependent.
+  base_resolution: 16
+  finest_resolution: 512

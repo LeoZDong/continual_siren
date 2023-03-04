@@ -3,6 +3,8 @@ from typing import Tuple
 
 import numpy as np
 import torch
+from hydra.utils import instantiate
+from omegaconf import DictConfig
 from torch import Tensor, nn
 
 import utils
@@ -132,7 +134,7 @@ class HashEmbeddingUnravel(HashEmbedding):
     Empirically, this performs a bit better in both continual and non-continual settings.
     """
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs) -> None:
         """Initialize `self.strides` instance variable, which contains one `stride` for
         each grid `resolution`. `stride` is used to linearly unravel D-dim coordinates.
         For example, if D = 2 on a grid resolution of 16, then `stride` is [1, 16].
@@ -193,7 +195,7 @@ class HashEmbeddingMRU(HashEmbeddingUnravel):
     leads to most interference.
     """
 
-    def __init__(self, mru_size, **kwargs):
+    def __init__(self, mru_size, **kwargs) -> None:
         """Initialize MRU queue and other book-keeping instance variables.
 
         Instance variables:
@@ -227,6 +229,7 @@ class HashEmbeddingMRU(HashEmbeddingUnravel):
         super().__init__(**kwargs)
         self.mru_size = int(mru_size)
 
+        # TODO: These need to be saved as part of checkpoints!
         # Set of used coordinates
         self.used = {}
         # Queue of most recently (first) used coordinates
@@ -247,7 +250,7 @@ class HashEmbeddingMRU(HashEmbeddingUnravel):
             grid_size = int(resolution**self.coord_dim)
             self.unravel_indices_permute[resolution] = torch.randperm(grid_size)
 
-    def add_to_used(self, first_used: list, resolution: int):
+    def add_to_used(self, first_used: list, resolution: int) -> None:
         """Add a list of hash indices to `self.used`.
         Args:
             first_used: List of hash indices first used.
@@ -255,7 +258,7 @@ class HashEmbeddingMRU(HashEmbeddingUnravel):
         """
         self.used[resolution] = self.used[resolution].union(set(first_used))
 
-    def add_to_mru(self, indices: list, resolution: int):
+    def add_to_mru(self, indices: list, resolution: int) -> None:
         """Add new `indices` to MRU. Pop tail if exceeds `self.mru_size`."""
         # Populate MRU queue
         self.most_recently_used[resolution].extendleft(indices)
@@ -366,7 +369,7 @@ class HashNet(nn.Module):
         outermost_linear: bool,
         hash_embedding: HashEmbedding,  # Recursively instantiated
         **kwargs,
-    ):
+    ) -> None:
         super().__init__()
         hash_embedding_dim = (
             hash_embedding.n_levels * hash_embedding.n_features_per_entry
@@ -394,7 +397,7 @@ class HashNet(nn.Module):
         # Xavier initialization for the small MLP
         self.net.apply(self._init_mlp_weights)
 
-    def _init_mlp_weights(self, module):
+    def _init_mlp_weights(self, module: nn.Module) -> None:
         """Custom initialization for the small MLP"""
         if isinstance(module, nn.Linear):
             nn.init.xavier_uniform_(module.weight)
@@ -406,3 +409,130 @@ class HashNet(nn.Module):
         output = self.net(coords)
 
         return output, coords
+
+
+class HashEmbeddingUnravelBlock(HashEmbedding):
+    """Unravel hash embedding scheme for block HashNet. Global coordinates are shifted
+    to the local coordinate system, and grid size is adjusted when unraveling.
+    """
+
+    def __init__(self, local_shift: Tensor, local_scale: Tensor, **kwargs) -> None:
+        """
+        Args:
+            local_shift: (1, D) Shift to apply on global coordinate to get local
+                coordinate in [-1, 1].
+            local_scale: (1, D) Scale to apply on global coordinate to get local
+                coordinate in [-1, 1].
+
+        Note that `resolution` refers to the *local* block's grid resolution! For
+        example, if we have 2x2 block HashNets, then a 8x8 local grid resolution
+        corresponds to 16x16 global resolution.
+        """
+        self.local_shift = local_shift
+        self.local_scale = local_scale
+        super().__init__(**kwargs)
+
+    def forward(self, x: Tensor) -> Tensor:
+        """Shift `x` into local coordinate first before querying."""
+        x = (x + self.local_shift) * self.local_scale
+        return super().forward(x)
+
+
+class BlockHashNet(nn.Module):
+    """Block version of HashNet where the total space is split into regions, and one
+    HashNet is responsible for one region.
+    """
+
+    def __init__(
+        self,
+        bound_min: float,
+        bound_max: float,
+        num_blocks_per_side: int,
+        out_features: int,
+        hash_embedding: DictConfig,  # NOT recursively instantiated
+        **kwargs,
+    ) -> None:
+        """Initialize by setting up a list of HashNets.
+        Args:
+            bound_min: Minimum bound of the total space (usually -1).
+            bound_max: Maximum bound of the total space (usually 1).
+            num_blocks_per_side: Number of block HashNets per side. If in 2D, then
+                a total of `num_blocks_per_side ** 2` HashNets will be created.
+            hash_embedding: DictConfig for hash embedding of *one* block HashNet. This
+                will be instantiated once per block HashNet.
+        """
+        super().__init__()
+
+        self.bound_min = bound_min
+        self.bound_max = bound_max
+        self.num_blocks_per_side = num_blocks_per_side
+        self.block_side_length = (bound_max - bound_min) / num_blocks_per_side
+        self.out_features = out_features
+        self.coord_dim = int(hash_embedding["coord_dim"])
+
+        # Initialize block HashNets
+        self.num_blocks_total = num_blocks_per_side**self.coord_dim
+        self.block_hash_nets = nn.ModuleList()
+
+        assert self.coord_dim == 2
+        for i in range(self.num_blocks_per_side):
+            for j in range(self.num_blocks_per_side):
+                local_shift = torch.tensor(
+                    [[-1 + self.block_side_length * i, -1 + self.block_side_length * j]]
+                )
+                local_scale = torch.tensor(
+                    [[self.block_side_length, self.block_side_length]]
+                )
+
+                embedding = instantiate(
+                    hash_embedding, local_shift=local_shift, local_scale=local_scale
+                )
+                hash_net = HashNet(
+                    **kwargs, out_features=out_features, hash_embedding=embedding
+                )
+                self.block_hash_nets.append(hash_net)
+
+        # Pre-compute strides for unraveling region indices
+        self.stride = torch.ones([1, self.coord_dim], dtype=torch.long)
+        s = 1
+        for dim in range(self.coord_dim):
+            self.stride[..., dim] = s
+            s *= num_blocks_per_side
+
+    def forward(self, coords: Tensor) -> Tuple[Tensor, Tensor]:
+        """Forward pass groups the batch of `coords` by the blocks they fall in, and
+        queries the corresponding HashNet for that block.
+        """
+        coords = (
+            coords.clone().detach().requires_grad_(True)
+        )  # Allows to take derivative w.r.t. input
+
+        # Assign region index to each coordinate
+        block_indices = self.coords_to_block_indices(coords)
+
+        # Query HashNet block by block
+        output = torch.zeros((coords.shape[0], self.out_features), device=coords.device)
+
+        for i in range(self.num_blocks_total):
+            mask = block_indices == i
+            if mask.sum() > 0:
+                coords_in_block = coords[mask]
+                output_block = self.block_hash_nets[i](coords_in_block)[0]
+                output[mask] = output_block
+
+        return output, coords
+
+    def coords_to_block_indices(self, coords: Tensor) -> Tensor:
+        """Convert a batch of coordinates to a batch of region indices.
+        Args:
+            coords: (bsz, self.coord_dim) Batch of coordinates.
+
+        Returns: (bsz, ) Batch of region indices in [0, num_blocks_total - 1]
+        """
+        blocks = ((coords - self.bound_min) / self.block_side_length).int()
+
+        # Need to clamp for the edge case when coord is exactly 1 (bound_max)
+        blocks = torch.clamp(blocks, max=self.num_blocks_per_side - 1)
+
+        block_indices = (blocks * self.stride).sum(-1)
+        return block_indices
