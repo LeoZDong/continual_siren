@@ -130,6 +130,7 @@ dmypy.json
 
 # Data files
 BSDS300/
+gigapixel/
 
 # Experiment results
 exp/
