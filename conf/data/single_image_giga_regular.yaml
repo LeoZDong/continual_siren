@@ -5,9 +5,9 @@ _target_: "data.image_data.ImageFitting"
 _recursive_: true
 
 # side_length: 19456
-# path: "gigapixel/tokyo_cropped.tif"
+# path: "datasets/gigapixel/tokyo_cropped.tif"
 side_length: 2000 # 8000
-path: "gigapixel/pluto.jpg"
+path: "datasets/gigapixel/pluto.jpg"
 
 region_simulator:
   divide_side_n: 100
