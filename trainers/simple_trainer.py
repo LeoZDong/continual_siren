@@ -26,6 +26,7 @@ class SimpleTrainer:
 
     def __init__(self, cfg: DictConfig, **kwargs):
         self.cfg = cfg
+        self.total_steps = int(self.cfg.trainer.total_steps)
         self.continual = self.cfg.trainer.continual
         self.network = instantiate(cfg.network)
         self.dataset = instantiate(cfg.data)
@@ -40,7 +41,7 @@ class SimpleTrainer:
             self.device = torch.device("mps")
         else:
             self.device = torch.device("cpu")
-        self.network = self.network.to(self.device)
+        self.network.to(self.device)
 
         self.optimizer = instantiate(
             self.cfg.trainer.optimizer, params=self.network.parameters()
@@ -83,8 +84,8 @@ class SimpleTrainer:
             self.device
         )
 
-        progress_bar = tqdm(total=self.cfg.trainer.total_steps)
-        while self.step < self.cfg.trainer.total_steps:
+        progress_bar = tqdm(total=self.total_steps)
+        while self.step < self.total_steps:
             model_input, ground_truth = self.get_next_step_data(
                 model_input, ground_truth
             )
@@ -255,37 +256,40 @@ class SimpleTrainer:
                 global_step=self.step,
             )
 
-            # Evaluate on each region individually
-            regions = np.arange(self.dataset.num_regions)
-            eval_mse_backward = []
-            for region in regions:
-                eval_mse = self.eval(eval_coords=region, output_img=False)[0]
-                if region < self.dataset.cur_region:
-                    eval_mse_backward.append(eval_mse)
+            # TEMP: Skip if too many regions (for gigapixel images)
+            skip_regions_eval = self.dataset.num_regions > 1000
+            if not skip_regions_eval:
+                # Evaluate on each region individually
+                regions = np.arange(self.dataset.num_regions)
+                eval_mse_backward = []
+                for region in regions:
+                    eval_mse = self.eval(eval_coords=region, output_img=False)[0]
+                    if region < self.dataset.cur_region:
+                        eval_mse_backward.append(eval_mse)
 
-                # Log evaluation loss for each region
-                psnr = mse2psnr(eval_mse)
-                self._tb_writer.add_scalar(
-                    tag=f"eval/psnr_on_region{region}",
-                    scalar_value=psnr,
-                    global_step=self.step,
-                )
+                    # Log evaluation loss for each region
+                    psnr = mse2psnr(eval_mse)
+                    self._tb_writer.add_scalar(
+                        tag=f"eval/psnr_on_region{region}",
+                        scalar_value=psnr,
+                        global_step=self.step,
+                    )
 
-            # Log evaluation loss for backward regions
-            if self.continual and len(eval_mse_backward) > 0:
-                eval_mse_backward = np.mean(eval_mse_backward)
-                psnr_backward = mse2psnr(eval_mse_backward)
-                self._tb_writer.add_scalar(
-                    tag="eval/psnr_on_backward_regions",
-                    scalar_value=psnr_backward,
-                    global_step=self.step,
-                )
+                # Log evaluation loss for backward regions
+                if self.continual and len(eval_mse_backward) > 0:
+                    eval_mse_backward = np.mean(eval_mse_backward)
+                    psnr_backward = mse2psnr(eval_mse_backward)
+                    self._tb_writer.add_scalar(
+                        tag="eval/psnr_on_backward_regions",
+                        scalar_value=psnr_backward,
+                        global_step=self.step,
+                    )
 
             # Record model output image on the full coordinate
             self._tb_writer.add_image(
                 "full/eval_out_full", full_img_out, global_step=self.step
             )
-            if self.step == 0:
+            if self.step == self.cfg.trainer.eval_every_steps:
                 self._tb_writer.add_image(
                     "full/gt_full", full_gt_img, global_step=self.step
                 )
@@ -337,7 +341,7 @@ class SimpleTrainer:
         )
 
     def is_final_step(self, step) -> bool:
-        return step == self.cfg.trainer.total_steps
+        return step == self.total_steps
 
     @property
     def need_to_switch_region(self) -> bool:
