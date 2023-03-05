@@ -1,3 +1,4 @@
+import time
 from collections import deque
 from typing import Tuple
 
@@ -186,6 +187,11 @@ class HashEmbeddingUnravel(HashEmbedding):
 
         return hash_indices
 
+    def to(self, device, **kwargs):
+        for resolution in self.strides.keys():
+            self.strides[resolution] = self.strides[resolution].to(device)
+        return super().to(device, **kwargs)
+
 
 class HashEmbeddingMRU(HashEmbeddingUnravel):
     """Most recently (first) used (MRU) hash embedding. We maintain an MRU queue as
@@ -288,6 +294,7 @@ class HashEmbeddingMRU(HashEmbeddingUnravel):
                treat the MRU queue as a hash table of hash embedding indices in case
                of a collision. We also save it as `collision_target` of this coordinate.
         """
+        t = time.time()
         primes = [
             1,
             2654435761,
@@ -305,6 +312,9 @@ class HashEmbeddingMRU(HashEmbeddingUnravel):
         overflow = unravel_indices >= (2**self.log2_hashtable_size)
         overflow_size = overflow.sum()
 
+        # print(f"Set up time: {time.time() - t}")
+        t = time.time()
+
         # Add the non-overflow and first-use indices used set and MRU queue
         if self.training and resolution in self.used.keys():
             used = torch.tensor(list(self.used[resolution]), dtype=torch.long)
@@ -316,6 +326,9 @@ class HashEmbeddingMRU(HashEmbeddingUnravel):
             self.add_to_used(first_used, resolution)
 
         hash_indices = unravel_indices
+
+        # print(f"Used set and MRU queue time: {time.time() - t}")
+        t = time.time()
 
         if overflow_size > 0:
             collision_target_entries = (
@@ -354,7 +367,22 @@ class HashEmbeddingMRU(HashEmbeddingUnravel):
                 collision_target_entries
             ][~need_to_compute]
 
+        # print(f"Overflow time: {time.time() - t}")
+
         return hash_indices
+
+    def to(self, device, **kwargs):
+        for resolution in self.collision_target.keys():
+            self.collision_target[resolution] = self.collision_target[resolution].to(
+                device
+            )
+
+        for resolution in self.unravel_indices_permute.keys():
+            self.unravel_indices_permute[resolution] = self.unravel_indices_permute[
+                resolution
+            ].to(device)
+
+        return super().to(device, **kwargs)
 
 
 class HashNet(nn.Module):
@@ -409,6 +437,10 @@ class HashNet(nn.Module):
         output = self.net(coords)
 
         return output, coords
+
+    def to(self, device, **kwargs):
+        self.hash_embedding.to(device, **kwargs)
+        return super().to(device, **kwargs)
 
 
 class HashEmbeddingUnravelBlock(HashEmbedding):
