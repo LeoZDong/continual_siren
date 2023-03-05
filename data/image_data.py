@@ -8,13 +8,6 @@ from torch.utils.data import Dataset
 
 from data.region_simulators import RegionSimulator
 
-try:
-    # Internal use by hydra (for instantiation)
-    bsds300_dir = f"{hydra.utils.get_original_cwd()}/BSDS300/images"
-except:
-    # External use by model inspector
-    bsds300_dir = "BSDS300/images"
-
 
 def get_mgrid(side_length: int, dim: int = 2) -> Tensor:
     """Generate a flattened grid of (x, y, ...) coordinates in a range of -1 to 1.
@@ -29,15 +22,20 @@ def get_mgrid(side_length: int, dim: int = 2) -> Tensor:
     return mgrid
 
 
-def get_bsds_tensor_square(side_length: int, split: str, id: str) -> Tensor:
-    """Return a BSDS image as a tensor, cropped into a square.
+def get_img_tensor_square(img_path: str, side_length: int) -> Tensor:
+    """Return an image as a tensor, cropped into a square.
     Args:
+        img_path: Path of image.
         side_length: Side length of the square to crop the image into.
-        split: Split of BSDS image.
-        id: ID of the BSDS image.
     """
-    dir = os.path.join(bsds300_dir, split, f"{id}.jpg")
-    img = torch.tensor(io.imread(dir) / 255).float()
+    try:
+        # Internal use by hydra
+        path = os.path.join(hydra.utils.get_original_cwd(), img_path)
+    except:
+        # External use by model inspector
+        path = img_path
+
+    img = torch.tensor(io.imread(path) / 255).float()
 
     # Resize image
     crop_x_l = (img.shape[0] - side_length) // 2
@@ -57,8 +55,7 @@ class ImageFitting(Dataset):
     def __init__(
         self,
         side_length: int,
-        data_split: str,
-        id: str,
+        path: str,
         region_simulator: RegionSimulator,
     ):
         """Initialize an image fitting dataset.
@@ -74,7 +71,7 @@ class ImageFitting(Dataset):
         rgb_dim = 3
 
         # Load full image and its coordinates
-        self.full_pixels = get_bsds_tensor_square(side_length, data_split, id)
+        self.full_pixels = get_img_tensor_square(path, side_length)
         self.full_coords = get_mgrid(side_length, spatial_dim)
 
         # Split the image and coordinates into regions
@@ -106,14 +103,3 @@ class ImageFitting(Dataset):
     def __getitem__(self, idx):
         """Return pixel at any coordinate on the *full* grid."""
         return self.full_coords[idx], self.full_pixels[idx]
-
-
-if __name__ == "__main__":
-    import matplotlib.pyplot as plt
-
-    # Display image
-    img = get_bsds_tensor_square(side_length=256, split="test", id="108005")
-    print(img.shape)
-    fig = plt.figure()
-    plt.imshow(img)
-    plt.show()
