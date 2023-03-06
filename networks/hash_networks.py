@@ -17,6 +17,8 @@ class HashEmbedding(nn.Module):
     def __init__(
         self,
         coord_dim: int,
+        grid_min: float,
+        grid_max: float,
         n_levels: int,
         n_features_per_entry: int,
         log2_hashtable_size: int,
@@ -27,6 +29,8 @@ class HashEmbedding(nn.Module):
         """Initialize a hash embedding.
         Args:
             coord_dim: Dimension of coordinate (either 2 or 3).
+            grid_min: Minimum grid coordinate (i.e. bounding box). Usually -1.
+            grid_max: Maximum grid coordinate (i.e. bounding box). Usually 1.
             n_levels: Number of levels for the multi-resolution hash
                 (i.e. `L` in InstantNGP paper).
             n_features_per_entry: Number of feature dimensions for each hash table entry
@@ -40,6 +44,8 @@ class HashEmbedding(nn.Module):
         """
         super().__init__()
         self.coord_dim = coord_dim
+        self.grid_min = grid_min
+        self.grid_max = grid_max
         self.n_levels = n_levels
         self.n_features_per_entry = n_features_per_entry
         self.log2_hashtable_size = log2_hashtable_size
@@ -80,7 +86,10 @@ class HashEmbedding(nn.Module):
                 min_vertex_coords,
                 max_vertex_coords,
             ) = utils.get_adjacent_vertices(
-                x, grid_min=-1, grid_max=1, vertex_resolution=resolution
+                x,
+                grid_min=self.grid_min,
+                grid_max=self.grid_max,
+                vertex_resolution=resolution,
             )
 
             # Query hash function and lookup table to get adjacent vertices' embeddings
