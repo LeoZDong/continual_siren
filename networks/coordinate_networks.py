@@ -58,11 +58,7 @@ class BaseCoordinateNet(nn.Module):
     """Base coordinate network that defines a template of forward pass."""
 
     def forward(self, coords: Tensor) -> Tuple[Tensor, Tensor]:
-        coords = (
-            coords.clone().detach().requires_grad_(True)
-        )  # allows to take derivative w.r.t. input
-        output = self.net(coords)
-        return output, coords
+        return self.net(coords)
 
     def forward_with_activations(
         self, coords: Tensor, retain_grad: bool = False, include_pre_nonlin: bool = True

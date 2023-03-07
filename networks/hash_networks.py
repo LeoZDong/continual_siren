@@ -131,6 +131,10 @@ class HashEmbedding(nn.Module):
             & xor_result
         )
 
+    @property
+    def out_dim(self):
+        return self.n_levels * self.n_features_per_entry
+
 
 class HashEmbeddingUnravel(HashEmbedding):
     """Hash embedding where we linearly unravel the coordinate directly as hash table
@@ -408,10 +412,9 @@ class HashNet(nn.Module):
         **kwargs,
     ) -> None:
         super().__init__()
-        hash_embedding_dim = (
-            hash_embedding.n_levels * hash_embedding.n_features_per_entry
-        )
+        hash_embedding_dim = hash_embedding.out_dim
         self.hash_embedding = hash_embedding
+        self.out_dim = out_features
 
         self.net = []
         #### Embedding layer ####
@@ -439,17 +442,16 @@ class HashNet(nn.Module):
         if isinstance(module, nn.Linear):
             nn.init.xavier_uniform_(module.weight)
 
-    def forward(self, coords: Tensor) -> Tuple[Tensor, Tensor]:
-        coords = (
-            coords.clone().detach().requires_grad_(True)
-        )  # allows to take derivative w.r.t. input
-        output = self.net(coords)
-
-        return output, coords
+    def forward(self, coords: Tensor) -> Tensor:
+        return self.net(coords)
 
     def to(self, device, **kwargs):
         self.hash_embedding.to(device, **kwargs)
         return super().to(device, **kwargs)
+
+    @property
+    def out_dim(self):
+        return self.out_dim
 
 
 class HashEmbeddingUnravelBlock(HashEmbedding):
@@ -540,14 +542,10 @@ class BlockHashNet(nn.Module):
             self.stride[..., dim] = s
             s *= num_blocks_per_side
 
-    def forward(self, coords: Tensor) -> Tuple[Tensor, Tensor]:
+    def forward(self, coords: Tensor) -> Tensor:
         """Forward pass groups the batch of `coords` by the blocks they fall in, and
         queries the corresponding HashNet for that block.
         """
-        coords = (
-            coords.clone().detach().requires_grad_(True)
-        )  # Allows to take derivative w.r.t. input
-
         # Assign region index to each coordinate
         block_indices = self.coords_to_block_indices(coords)
 
@@ -561,7 +559,7 @@ class BlockHashNet(nn.Module):
                 output_block = self.block_hash_nets[i](coords_in_block)[0]
                 output[mask] = output_block
 
-        return output, coords
+        return output
 
     def coords_to_block_indices(self, coords: Tensor) -> Tensor:
         """Convert a batch of coordinates to a batch of region indices.
