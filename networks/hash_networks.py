@@ -414,7 +414,7 @@ class HashNet(nn.Module):
         super().__init__()
         hash_embedding_dim = hash_embedding.out_dim
         self.hash_embedding = hash_embedding
-        self.out_dim = out_features
+        self._out_dim = out_features
 
         self.net = []
         #### Embedding layer ####
@@ -451,7 +451,7 @@ class HashNet(nn.Module):
 
     @property
     def out_dim(self):
-        return self.out_dim
+        return self._out_dim
 
 
 class HashEmbeddingUnravelBlock(HashEmbedding):
