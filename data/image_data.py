@@ -1,4 +1,5 @@
 import os
+from typing import Dict, List, Tuple
 
 import hydra
 import skimage.io as io
@@ -76,9 +77,13 @@ class ImageFitting(Dataset):
 
         # Split the image and coordinates into regions
         (
-            self.pixels_regions,
             self.coords_regions,
-        ) = region_simulator.simulate_regions(self.full_pixels, self.full_coords)
+            self.pixels_regions,
+        ) = region_simulator.simulate_regions(self.full_coords, self.full_pixels)
+
+        # Change input regions to dictionary format
+        for i in range(len(self.coords_regions)):
+            self.coords_regions[i] = {"coords": self.coords_regions[i]}
 
         # Flatten spatial dimension to obtain a batch of coordinates for training
         self.full_pixels = self.full_pixels.reshape(-1, rgb_dim)
@@ -88,18 +93,52 @@ class ImageFitting(Dataset):
         self.set_cur_region(0)
 
     def set_cur_region(self, region: int) -> None:
-        self.cur_region = region
+        self._cur_region = region
         self.pixels = self.pixels_regions[self.cur_region]
         self.coords = self.coords_regions[self.cur_region]
-
-    @property
-    def num_regions(self) -> int:
-        return len(self.pixels_regions)
 
     def __len__(self):
         """Number of pixels in *full* grid."""
         return self.full_pixels.shape[0]
 
-    def __getitem__(self, idx):
-        """Return pixel at any coordinate on the *full* grid."""
-        return self.full_coords[idx], self.full_pixels[idx]
+    def __getitem__(self, idx) -> Tuple[Dict[str, Tensor], Tensor]:
+        """Return pixel at any coordinate on the *full* grid.
+
+        Returns: 2-tuple for input and output. Input is kwargs dictionary to feed into
+        the network. Output is a tensor to match the network output.
+            Input: 'coords': (2,) Coordinate in image.
+            Output: (3,) Pixel value of this ray.
+        """
+        return ({"coords": self.full_coords[idx]}, self.full_pixels[idx])
+
+    @property
+    def cur_region(self) -> int:
+        return self._cur_region
+
+    @property
+    def num_regions(self) -> int:
+        return len(self.pixels_regions)
+
+    @property
+    def input(self) -> Tensor:
+        return self.coords
+
+    @property
+    def output(self) -> Tensor:
+        return self.pixels
+
+    @property
+    def full_input(self) -> Dict[str, Tensor]:
+        return {"coords": self.full_coords}
+
+    @property
+    def full_output(self) -> Tensor:
+        return self.full_pixels
+
+    @property
+    def input_regions(self) -> List:
+        return self.coords_regions
+
+    @property
+    def output_regions(self) -> List:
+        return self.pixels_regions

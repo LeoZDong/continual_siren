@@ -13,7 +13,7 @@ from torch.utils import data
 from torch.utils.tensorboard.writer import SummaryWriter
 from tqdm import tqdm
 
-from utils import mse2psnr
+from utils import move_to, mse2psnr
 
 # A logger for this file
 log = logging.getLogger(__name__)
@@ -80,8 +80,8 @@ class SimpleTrainer:
         # Only used in continual setting: return all points in the current region.
         # Each "batch" is all points in the current region.
         model_input, ground_truth = self.dataset.coords, self.dataset.pixels
-        model_input, ground_truth = model_input.to(self.device), ground_truth.to(
-            self.device
+        model_input, ground_truth = move_to(model_input, self.device), move_to(
+            ground_truth, self.device
         )
 
         progress_bar = tqdm(total=self.total_steps)
@@ -90,7 +90,7 @@ class SimpleTrainer:
                 model_input, ground_truth
             )
 
-            model_output, coords = self.network(model_input)
+            model_output = self.network(**model_input)
             loss = self.loss(model_output, ground_truth)
             self.maybe_log(loss)
 
@@ -132,21 +132,21 @@ class SimpleTrainer:
         # Pick the specified coordinate grid to evaluate on
         if eval_coords == "current":
             model_input, ground_truth = (
-                self.dataset.coords.to(self.device),
-                self.dataset.pixels.to(self.device),
+                move_to(self.dataset.input, self.device),
+                move_to(self.dataset.output, self.device),
             )
         elif eval_coords == "full":
             model_input, ground_truth = (
-                self.dataset.full_coords.to(self.device),
-                self.dataset.full_pixels.to(self.device),
+                move_to(self.dataset.full_input, self.device),
+                move_to(self.dataset.full_output, self.device),
             )
         else:
             model_input, ground_truth = (
-                self.dataset.coords_regions[eval_coords].to(self.device),
-                self.dataset.pixels_regions[eval_coords].to(self.device),
+                move_to(self.dataset.input_regions[eval_coords], self.device),
+                move_to(self.dataset.output_regions[eval_coords], self.device),
             )
 
-        model_output = self.network(model_input)[0]
+        model_output = self.network(**model_input)
         eval_mse = self.mse_loss(model_output, ground_truth).item()
 
         self.network.train()
@@ -205,7 +205,9 @@ class SimpleTrainer:
             except StopIteration:
                 self.dataloader_iter = iter(self.dataloader)
                 model_input, ground_truth = next(self.dataloader_iter)
-            return model_input.to(self.device), ground_truth.to(self.device)
+
+            # Move to target device
+            return move_to(model_input, self.device), move_to(ground_truth, self.device)
 
     def maybe_switch_region(
         self, model_input: Tensor, ground_truth: Tensor
@@ -223,11 +225,8 @@ class SimpleTrainer:
                 f"step={self.step}. Switching region from {self.dataset.cur_region} to {new_region}!"
             )
             self.dataset.set_cur_region(new_region)
-            model_input, ground_truth = self.dataset.coords, self.dataset.pixels
-            model_input, ground_truth = model_input.to(self.device), ground_truth.to(
-                self.device
-            )
-            return model_input, ground_truth
+            model_input, ground_truth = self.dataset.input, self.dataset.output
+            return move_to(model_input, self.device), move_to(ground_truth, self.device)
         else:
             return model_input, ground_truth
 

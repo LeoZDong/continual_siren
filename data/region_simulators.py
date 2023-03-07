@@ -1,5 +1,5 @@
 import random
-from typing import List, Tuple
+from typing import Any, List, Tuple
 
 import numpy as np
 import torch
@@ -9,18 +9,16 @@ from torch import Tensor
 
 class RegionSimulator:
     def simulate_regions(
-        self, full_pixels: Tensor, full_coords: Tensor
+        self, full_input: Any, full_output: Any
     ) -> Tuple[List[Tensor], List[Tensor]]:
         """Simulate regions.
         Args:
-            full_pixels: (side_length, side_length, value_dim) Full set of ground truth
-                pixels.
-            full_coords: (side_length, side_length, spatial_dim) Full set of ground
-                truth coordinates corresponding to `full_pixels`.
+            full_input: Full set of input data.
+            full_output: Full set of output data.
 
         Returns:
-            pixels_regions: List of pixel regions.
-            coords_regions: Corresponding coordinate regions.
+            input_regions: List of input regions.
+            output_regions: Corresponding output regions.
         """
         raise NotImplementedError
 
@@ -46,9 +44,19 @@ class RegularRegionSimulator(RegionSimulator):
         self.permute = permute
 
     def simulate_regions(
-        self, full_pixels: Tensor, full_coords: Tensor
+        self, full_coords: Tensor, full_pixels: Tensor
     ) -> Tuple[Tensor, Tensor]:
-        """See super class for documentation."""
+        """Simulate regions for image fitting.
+        Args:
+            full_coords: (side_length, side_length, spatial_dim) Full set of ground
+                truth coordinates.
+            full_pixels: (side_length, side_length, value_dim) Full set of ground truth
+                pixels corresponding to `full_coords`
+
+        Returns:
+            coords_regions: List of coordinate regions.
+            pixels_regions: List of pixels corresponding to each coordinate region.
+        """
         side_length = full_pixels.shape[0]
         spatial_dim = full_coords.shape[-1]
         rgb_dim = full_pixels.shape[-1]
@@ -61,23 +69,10 @@ class RegularRegionSimulator(RegionSimulator):
             )
 
         # Simulate regions by creating adjacent square patches row-by-row
-        pixels_regions = []
         coords_regions = []
+        pixels_regions = []
         for i in range(self.divide_side_n):
             for j in range(self.divide_side_n):
-                pixels_region = full_pixels[
-                    i
-                    * side_length_per_region : min(
-                        (i + 1) * side_length_per_region + self.overlap,
-                        side_length,
-                    ),
-                    j
-                    * side_length_per_region : min(
-                        (j + 1) * side_length_per_region + self.overlap,
-                        side_length,
-                    ),
-                    :,
-                ]
                 coords_region = full_coords[
                     i
                     * side_length_per_region : min(
@@ -91,21 +86,34 @@ class RegularRegionSimulator(RegionSimulator):
                     ),
                     :,
                 ]
-                pixels_regions.append(pixels_region.reshape(-1, rgb_dim))
+                pixels_region = full_pixels[
+                    i
+                    * side_length_per_region : min(
+                        (i + 1) * side_length_per_region + self.overlap,
+                        side_length,
+                    ),
+                    j
+                    * side_length_per_region : min(
+                        (j + 1) * side_length_per_region + self.overlap,
+                        side_length,
+                    ),
+                    :,
+                ]
                 coords_regions.append(coords_region.reshape(-1, spatial_dim))
+                pixels_regions.append(pixels_region.reshape(-1, rgb_dim))
 
         # Optionally randomly permute the region orderings
-        permute_regions = list(range(len(pixels_regions)))
+        permute_regions = list(range(len(coords_regions)))
         if self.permute:
             random.shuffle(permute_regions)
 
-        pixels_regions_permute = []
         coords_regions_permute = []
+        pixels_regions_permute = []
         for region in permute_regions:
-            pixels_regions_permute.append(pixels_regions[region])
             coords_regions_permute.append(coords_regions[region])
+            pixels_regions_permute.append(pixels_regions[region])
 
-        return pixels_regions_permute, coords_regions_permute
+        return coords_regions_permute, pixels_regions_permute
 
 
 class RandomRegionSimulator(RegionSimulator):
@@ -126,11 +134,11 @@ class RandomRegionSimulator(RegionSimulator):
         self.region_size_max = region_size_max
 
     def simulate_regions(
-        self, full_pixels: Tensor, full_coords: Tensor
+        self, full_coords: Tensor, full_pixels: Tensor
     ) -> Tuple[List[Tensor], List[Tensor]]:
-        """See super class for documentation."""
-        pixels_regions = []
+        """See `RegularRegionSimulator` for documentation."""
         coords_regions = []
+        pixels_regions = []
 
         axes = (full_coords[:, 0, 0].numpy(), full_coords[0, :, 1].numpy())
         interpolate = RegularGridInterpolator(
@@ -164,4 +172,4 @@ class RandomRegionSimulator(RegionSimulator):
             coords_regions.append(torch.tensor(coords, dtype=full_coords.dtype))
             pixels_regions.append(torch.tensor(pixels, dtype=full_pixels.dtype))
 
-        return pixels_regions, coords_regions
+        return coords_regions, pixels_regions

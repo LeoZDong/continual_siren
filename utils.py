@@ -1,4 +1,4 @@
-from typing import List, Tuple
+from typing import Dict, List, Tuple, Union
 
 import numpy as np
 import torch
@@ -17,6 +17,18 @@ def rgb_float2uint(rgb: np.ndarray):
 def mse2psnr(mse: float, max_intensity: float = 1):
     """Convert MSE to PSNR."""
     return 20 * np.log10(max_intensity) - 10 * np.log10(mse)
+
+
+def move_to(x: Union[Tensor, Dict], device: torch.device) -> Union[Tensor, Dict]:
+    """Move `x` to target `device`. If `x` is a dictionary, move all its values."""
+    if isinstance(x, Tensor):
+        return x.to(device)
+    elif isinstance(x, Dict):
+        for key, value in x.items():
+            x[key] = value.to(device)
+        return x
+    else:
+        raise TypeError
 
 
 def get_module_names(model: nn.Module) -> List[str]:
