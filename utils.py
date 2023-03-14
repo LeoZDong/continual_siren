@@ -124,10 +124,14 @@ def get_vertex_indices(min_vertex_indices: Tensor) -> Tensor:
     """
     device = min_vertex_indices.device
     if min_vertex_indices.shape[1] == 2:
-        shift = torch.tensor([[[i, j] for i in [0, 1] for j in [0, 1]]], device=device)
+        shift = torch.tensor(
+            [[[i, j] for i in [0, 1] for j in [0, 1]]], dtype=torch.long, device=device
+        )
     else:
         shift = torch.tensor(
-            [[[i, j, k] for i in [0, 1] for j in [0, 1] for k in [0, 1]]], device=device
+            [[[i, j, k] for i in [0, 1] for j in [0, 1] for k in [0, 1]]],
+            dtype=torch.long,
+            device=device,
         )
 
     return min_vertex_indices.unsqueeze(1) + shift
@@ -170,10 +174,7 @@ def get_adjacent_vertices(
     # Need to deal with edge case because coordinate value may be 1 in our code base,
     # where in InstantNGP it is strictly less than 1. If coord = 1, `floor` will not
     # round down one index, so need to manually clip min vertex index.
-    min_vertex_indices = torch.min(
-        min_vertex_indices,
-        torch.ones_like(min_vertex_indices) * (int(voxel_resolution) - 1),
-    )
+    min_vertex_indices = torch.clamp(min_vertex_indices, max=int(voxel_resolution) - 1)
     max_vertex_indices = min_vertex_indices + 1
 
     # Get vertex indices of the surrounding pixel / voxel
