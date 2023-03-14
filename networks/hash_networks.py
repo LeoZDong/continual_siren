@@ -185,9 +185,14 @@ class HashEmbeddingUnravel(HashEmbedding):
 
         grid_size = resolution**self.coord_dim
         if grid_size > 2**self.log2_hashtable_size:
-            xor_result = torch.zeros_like(vertex_indices)[..., 0]
+            xor_result = torch.zeros(
+                vertex_indices.shape[:2],
+                dtype=torch.long,
+                device=vertex_indices.device,
+            )
             for dim in range(self.coord_dim):
                 xor_result ^= vertex_indices[..., dim] * primes[dim]
+
             hash_indices = (
                 torch.tensor(
                     (1 << self.log2_hashtable_size) - 1, device=xor_result.device
