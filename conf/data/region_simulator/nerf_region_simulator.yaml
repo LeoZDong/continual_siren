@@ -1,0 +1,5 @@
+_target_: data.region_simulators.NeRFRegionSimulator
+
+num_images_per_region: 1
+img_h: 800
+img_w: 800
