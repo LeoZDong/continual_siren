@@ -259,4 +259,111 @@ def linear_interpolate_3D(
     vertices in `vertex_values` are ordered as:
         [c000, c001, c010, c011, c100, c101, c110, c111]
     """
-    raise NotImplementedError
+    # TODO: As with 2D interpolation, we can optionally offset x
+    weights = (x - min_vertex_coords) / (max_vertex_coords - min_vertex_coords)
+
+    # Interpolate along first axis
+    # 0->c000, 1->c001, 2->c010, 3->c011, 4->c100, 5->c101, 6->c110, 7->c111
+    c00 = (
+        vertex_values[:, 0] * (1 - weights[:, 0, None])
+        + vertex_values[:, 4] * weights[:, 0, None]
+    )
+    c01 = (
+        vertex_values[:, 1] * (1 - weights[:, 0, None])
+        + vertex_values[:, 5] * weights[:, 0, None]
+    )
+    c10 = (
+        vertex_values[:, 2] * (1 - weights[:, 0, None])
+        + vertex_values[:, 6] * weights[:, 0, None]
+    )
+    c11 = (
+        vertex_values[:, 3] * (1 - weights[:, 0, None])
+        + vertex_values[:, 7] * weights[:, 0, None]
+    )
+
+    # Interpolate along second axis
+    c0 = c00 * (1 - weights[:, 1, None]) + c10 * weights[:, 1, None]
+    c1 = c01 * (1 - weights[:, 1, None]) + c11 * weights[:, 1, None]
+
+    # Interpolate along third axis
+    c = c0 * (1 - weights[:, 2, None]) + c1 * weights[:, 2, None]
+
+    return c
+
+
+def near_far_from_aabb(
+    rays_o: Tensor, rays_d: Tensor, aabb: Tensor, min_near: float
+) -> Tuple[Tensor, Tensor]:
+    """Calculate near and far intersection *time* of a batch of rays with an axis-aligned
+    bounding box (aabb). If intersection time is `t` for a ray at origin `o` and unit
+    direction `d`, then the intersection point is `o + t * d`.
+    Args:
+        rays_o: (bsz, 3) Origins of the batch of rays.
+        rays_d: (bsz, 3) Directions of the batch of rays.
+        aabb: (6, ) Bounding box represented as: (xmin, ymin, zmin, xmax, ymax, zmax).
+        min_near: Minimum near intersection time. Intersection times less than `min_near`
+            are ceiled to `min_near`.
+
+    Returns:
+        (bsz, 1) Near intersection times for the batch of rays.
+        (bsz, 1) Far intersection times for the batch of rays.
+    """
+    # Calculate near and far intersection times of the ray with each axis
+    t1_x = (aabb[0] - rays_o[:, 0]) / rays_d[:, 0]
+    t2_x = (aabb[3] - rays_o[:, 0]) / rays_d[:, 0]
+
+    t1_y = (aabb[1] - rays_o[:, 1]) / rays_d[:, 1]
+    t2_y = (aabb[4] - rays_o[:, 1]) / rays_d[:, 1]
+
+    t1_z = (aabb[2] - rays_o[:, 2]) / rays_d[:, 2]
+    t2_z = (aabb[5] - rays_o[:, 2]) / rays_d[:, 2]
+
+    # Calculate near and far intersection times
+    # Near intersection time is the maximum of near intersection times for each axis
+    t_near = torch.maximum(
+        torch.maximum(torch.minimum(t1_x, t2_x), torch.minimum(t1_y, t2_y)),
+        torch.minimum(t1_z, t2_z),
+    )
+    # Far intersection time is the minimum of far intersection times for each axis
+    t_far = torch.minimum(
+        torch.minimum(torch.maximum(t1_x, t2_x), torch.maximum(t1_y, t2_y)),
+        torch.maximum(t1_z, t2_z),
+    )
+
+    # Clip near intersection time
+    t_near = torch.clip(t_near, min=min_near)
+
+    return t_near.unsqueeze(1), t_far.unsqueeze(1)
+
+
+def create_spheric_poses(radius, mean_h, n_poses):
+    """
+    Create circular poses around z axis.
+    Inputs:
+        radius: the (negative) height and the radius of the circle.
+        mean_h: mean camera height
+    Outputs:
+        spheric_poses: (n_poses, 3, 4) the poses in the circular path
+    """
+
+    def spheric_pose(theta, phi, radius):
+        trans_t = lambda t: np.array(
+            [[1, 0, 0, 0], [0, 1, 0, 2 * mean_h], [0, 0, 1, -t]]
+        )
+
+        rot_phi = lambda phi: np.array(
+            [[1, 0, 0], [0, np.cos(phi), -np.sin(phi)], [0, np.sin(phi), np.cos(phi)]]
+        )
+
+        rot_theta = lambda th: np.array(
+            [[np.cos(th), 0, -np.sin(th)], [0, 1, 0], [np.sin(th), 0, np.cos(th)]]
+        )
+
+        c2w = rot_theta(theta) @ rot_phi(phi) @ trans_t(radius)
+        c2w = np.array([[-1, 0, 0], [0, 0, 1], [0, 1, 0]]) @ c2w
+        return c2w
+
+    spheric_poses = []
+    for th in np.linspace(0, 2 * np.pi, n_poses + 1)[:-1]:
+        spheric_poses += [spheric_pose(th, -np.pi / 12, radius)]
+    return np.stack(spheric_poses, 0)
