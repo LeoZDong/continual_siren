@@ -191,30 +191,27 @@ class NeRFRegionSimulator(RegionSimulator):
         """Simulate regions for NeRF training. One region contains all rays in one image.
         Args:
             full_input: Dictionary containing:
-                'directions': (h * w, 3) Directions of rays towards each pixel in camera
-                    coordinates. This is the same for all images.
-                'poses': (num_frames, 3, 4) Poses of camera, one for each image frame.
+                'rays_o': (num_frames, h * w, 3) Origins of all rays in all image frames.
+                'rays_d': (num_frames, h * w, 3) Corresponding ray directions.
             full_output: (num_frames, h * w, 3) Pixel values of all rays in all image frames.
 
         Returns:
             input_regions: List where each item is a dictionary containing:
-                'directions': (h * w, 3) Directions of rays in this region.
-                'poses': (h * w, 3, 4) Pose of each ray in this region.
+                'rays_o': (h * w, 3) Origins of rays in this region.
+                'rays_d': (h * w, 3) Directions of rays in this region.
             output_regions: List where each item is:
                 (h * w, 3) Pixel values of each ray in this region.
         """
         input_regions = []
         output_regions = []
 
-        num_frames = full_input["poses"].shape[0]
-        num_rays = full_output.shape[1]
+        num_frames = full_input["rays_o"].shape[0]
         for frame_idx in range(num_frames):
             # Pose is expanded to one pose per ray, even though poses for all rays are
             # the same. Using `expand` does not allocate more memory.
-            poses = full_input["poses"][frame_idx].unsqueeze(0).expand(num_rays, 3, 4)
             input = {
-                "directions": full_input["directions"],
-                "poses": poses,
+                "rays_o": full_input["rays_o"][frame_idx],
+                "rays_d": full_input["rays_d"][frame_idx],
             }
             output = full_output[frame_idx]
             input_regions.append(input)
