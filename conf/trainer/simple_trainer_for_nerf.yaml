@@ -1,0 +1,4 @@
+defaults:
+  - simple_trainer_for_hash
+
+_target_: "trainers.simple_trainer_nerf.SimpleTrainerNerf"

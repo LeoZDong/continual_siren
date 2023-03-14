@@ -1,0 +1,9 @@
+defaults:
+  - region_simulator: nerf_region_simulator
+
+_target_: "data.nerf_data.NeRFSyntheticDataset"
+_recursive_: true
+
+path: "datasets/nerf_synthetic/lego"
+split: "train"
+downsample: 0.1
