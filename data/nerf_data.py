@@ -3,9 +3,11 @@ import os
 from typing import Dict, List, Tuple
 
 import cv2
+import hydra
 import numpy as np
 import skimage.io as io
 import torch
+from einops import rearrange
 from kornia import create_meshgrid
 from torch import Tensor
 from torch.utils import data
@@ -13,6 +15,7 @@ from torch.utils.data import Dataset
 from tqdm import tqdm
 
 from data.region_simulators import RegionSimulator
+from utils import create_spheric_poses
 
 
 def read_image(img_path: str, img_wh: Tuple[int, int], blend_a: bool = True):
@@ -71,6 +74,36 @@ def get_ray_directions(H, W, K, random=False, return_uv=False, flatten=True):
     return directions
 
 
+def get_rays(directions: Tensor, c2w: Tensor):
+    """Get ray origin and directions in world coordinate for all pixels in one image.
+    Reference: https://www.scratchapixel.com/lessons/3d-basic-rendering/
+               ray-tracing-generating-camera-rays/standard-coordinate-systems
+
+    Inputs:
+        directions: (N, 3) ray directions in camera coordinate
+        c2w: (3, 4) or (N, 3, 4) transformation matrix from camera coordinate to world coordinate
+
+    Outputs:
+        rays_o: (N, 3), the origin of the rays in world coordinate
+        rays_d: (N, 3), the direction of the rays in world coordinate
+    """
+    if c2w.ndim == 2:
+        # Rotate ray directions from camera coordinate to the world coordinate
+        rays_d = directions @ c2w[:, :3].T
+    else:
+        rays_d = rearrange(directions, "n c -> n 1 c") @ rearrange(
+            c2w[..., :3], "n a b -> n b a"
+        )
+        rays_d = rearrange(rays_d, "n 1 c -> n c")
+    # Make ray directions unit vectors
+    rays_d /= torch.linalg.norm(rays_d, dim=1, keepdim=True)
+
+    # The origin of all rays is the camera origin in world coordinate
+    rays_o = c2w[..., 3].expand_as(rays_d)
+
+    return rays_o, rays_d
+
+
 class NeRFSyntheticDataset(Dataset):
     def __init__(
         self,
@@ -80,7 +113,10 @@ class NeRFSyntheticDataset(Dataset):
         region_simulator: RegionSimulator,
     ):
         super().__init__()
-        self.path = path
+        try:
+            self.path = os.path.join(hydra.utils.get_original_cwd(), path)
+        except:
+            self.path = path
         self.split = split
         self.downsample = downsample
         self.region_simulator = region_simulator
@@ -93,23 +129,25 @@ class NeRFSyntheticDataset(Dataset):
         self.read_intrinsics()
         self.read_data(split)
 
+        # Generate a set of poses for video generation
+        self.generate_video_poses()
+        # Number of frames / poses for generating the test time video
+        num_frames_for_video = self.rays_o_video.shape[0]
+        self._video_inputs = [
+            {"rays_o": self.rays_o_video[i], "rays_d": self.rays_d_video[i]}
+            for i in range(num_frames_for_video)
+        ]
+
         # Simulate regions
         self._input_regions, self._output_regions = region_simulator.simulate_regions(
-            {"directions": self.directions, "poses": self.poses}, self.pixels
+            {"rays_o": self.rays_o, "rays_d": self.rays_d}, self.pixels
         )
 
         # Set "full data" (combination of rays in all regions)
-        num_frames = self.pixels.shape[0]
-        num_rays_per_frame = self.pixels.shape[1]
-        full_directions = self.directions.unsqueeze(0).expand(
-            num_frames, num_rays_per_frame, 3
-        )
-        full_directions = full_directions.reshape(-1, 3)
-        full_poses = self.poses.unsqueeze(1).expand(
-            num_frames, num_rays_per_frame, 3, 4
-        )
-        full_poses = full_poses.reshape(-1, 3, 4)
-        self._full_input = {"directions": full_directions, "poses": full_poses}
+        self._full_input = {
+            "rays_o": self.rays_o.reshape(-1, 3),
+            "rays_d": self.rays_d.reshape(-1, 3),
+        }
         self._full_output = self.pixels.reshape(-1, 3)
 
         # Initialize current region to be the first region
@@ -127,6 +165,7 @@ class NeRFSyntheticDataset(Dataset):
             directions: (h * w, 3) Directions of rays towards each pixel in camera coordinates.
             img_wh: 2-tuple of image height and width.
         """
+
         # Meta data `camera_angle_x` is the same across splits, so just read from train
         with open(os.path.join(self.path, "transforms_train.json"), "r") as f:
             meta = json.load(f)
@@ -143,33 +182,63 @@ class NeRFSyntheticDataset(Dataset):
     def read_data(self, split):
         """Read and store image frames and their corresponding poses.
         Instance variables:
+            rays_o: (num_frames, h * w, 3) Origins of all rays in all image frames in
+                world coordinate.
+            rays_d: (num_frames, h * w, 3) Corresponding ray directions.
             pixels: (num_frames, h * w, 3) RGB pixel values of each image frame (flattened).
-            poses: (num_frames, 3, 4) Pose matrix (camera-to-world transformation matrix)
-                for each image frame.
         """
+        self.rays_o = []
+        self.rays_d = []
         self.pixels = []
-        self.poses = []
 
         with open(os.path.join(self.path, f"transforms_{split}.json"), "r") as f:
             frames = json.load(f)["frames"]
 
         print(f"Loading {len(frames)} {split} images ...")
+        heights = []
         for frame in tqdm(frames):
             c2w = torch.tensor(frame["transform_matrix"], dtype=torch.float32)[:3, :4]
 
             # Scale camera-to-world transform matrix
             c2w[:, 1:3] *= -1  # [right up back] to [right down front]
-            pose_radius_scale = 1.5
+
+            # NOTE: leaving this here as `ngp_pl` has it. But having scale be 1 makes
+            # the cameras all within the [-1, 1] bound (on x and y; within [0, 1] on z).
+            # pose_radius_scale = 1.5
+            pose_radius_scale = 1
             c2w[:, 3] /= torch.linalg.norm(c2w[:, 3]) / pose_radius_scale
 
-            self.poses.append(c2w)
+            # Obtain rays in world coordinate
+            rays_o, rays_d = get_rays(self.directions, c2w)
+            self.rays_o.append(rays_o)
+            self.rays_d.append(rays_d)
 
+            # Record corresponding pixel values to these rays
             img_path = os.path.join(self.path, f"{frame['file_path']}.png")
             img = read_image(img_path, (self.img_w, self.img_h))
             self.pixels.append(img)
 
+            # Record average height of this frame
+            heights.append(rays_o[:, 2].mean())
+
+        self.rays_o = torch.stack(self.rays_o)  # (num_frames, h * w, 3)
+        self.rays_d = torch.stack(self.rays_d)  # (num_frames, h * w, 3)
         self.pixels = torch.stack(self.pixels)  # (num_frames, h * w, 3)
-        self.poses = torch.stack(self.poses)  # (num_frames, 3, 4)
+        self.mean_h = sum(heights) / len(heights)
+
+    def generate_video_poses(self):
+        c2ws = create_spheric_poses(radius=1.2, mean_h=self.mean_h, n_poses=120)
+        c2ws = torch.FloatTensor(c2ws)
+        self.rays_o_video = []
+        self.rays_d_video = []
+
+        for c2w in c2ws:
+            rays_o, rays_d = get_rays(self.directions, c2w)
+            self.rays_o_video.append(rays_o)
+            self.rays_d_video.append(rays_d)
+
+        self.rays_o_video = torch.stack(self.rays_o_video)
+        self.rays_d_video = torch.stack(self.rays_d_video)
 
     def __len__(self):
         """Dataset size is defined as the total number pixels / rays."""
@@ -188,7 +257,10 @@ class NeRFSyntheticDataset(Dataset):
         pixel_idx = idx % self.pixels.shape[1]
 
         return (
-            {"directions": self.directions[pixel_idx], "poses": self.poses[frame_idx]},
+            {
+                "rays_o": self.rays_o[frame_idx, pixel_idx],
+                "rays_d": self.rays_d[frame_idx, pixel_idx],
+            },
             self.pixels[frame_idx, pixel_idx],
         )
 
@@ -224,13 +296,6 @@ class NeRFSyntheticDataset(Dataset):
     def output_regions(self) -> List:
         return self._output_regions
 
-
-if __name__ == "__main__":
-    dataset = NeRFSyntheticDataset("datasets/nerf_synthetic/lego", "train", 1)
-    print(dataset[0])
-    loader = data.DataLoader(
-        dataset,
-        batch_size=4,
-        shuffle=True,
-    )
-    batch = next(iter(loader))
+    @property
+    def video_inputs(self) -> List[Dict[str, Tensor]]:
+        return self._video_inputs
