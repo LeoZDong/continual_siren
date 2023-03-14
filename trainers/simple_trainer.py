@@ -68,9 +68,10 @@ class SimpleTrainer:
 
         # Only used in non-continual setting: randomly sample points from the full grid
         # Each "batch" has the same number of points as *one* region in the continual case.
+        # TODO: Make the 6400 max batch size configurable?
         self.dataloader = data.DataLoader(
             self.dataset,
-            batch_size=len(self.dataset) // self.dataset.num_regions,
+            batch_size=min(len(self.dataset) // self.dataset.num_regions, 6400),
             shuffle=True,
         )
         self.dataloader_iter = iter(self.dataloader)
@@ -79,7 +80,7 @@ class SimpleTrainer:
         # Prepare data:
         # Only used in continual setting: return all points in the current region.
         # Each "batch" is all points in the current region.
-        model_input, ground_truth = self.dataset.coords, self.dataset.pixels
+        model_input, ground_truth = self.dataset.input, self.dataset.output
         model_input, ground_truth = move_to(model_input, self.device), move_to(
             ground_truth, self.device
         )
@@ -125,7 +126,7 @@ class SimpleTrainer:
             eval_mse: Evaluation MSE loss on the specified `eval_coords`.
             img_out (side_length, side_length, 3): Model output for the specified
                 `eval_coords` as RGB tensor.
-            ground_truth (side_length, side_length, 3): Ground truth image for comparison.
+            gt_img_out (side_length, side_length, 3): Ground truth image for comparison.
         """
         self.network.eval()
 
@@ -197,6 +198,7 @@ class SimpleTrainer:
             sampled points in the full grid.
         """
         if self.continual:
+            # TODO: Set a maximum batch for continual!!
             return self.maybe_switch_region(model_input, ground_truth)
         else:
             # Look out for stop iteration
@@ -255,34 +257,31 @@ class SimpleTrainer:
                 global_step=self.step,
             )
 
-            # TEMP: Skip if too many regions (for gigapixel images)
-            skip_regions_eval = self.dataset.num_regions > 1000
-            if not skip_regions_eval:
-                # Evaluate on each region individually
-                regions = np.arange(self.dataset.num_regions)
-                eval_mse_backward = []
-                for region in regions:
-                    eval_mse = self.eval(eval_coords=region, output_img=False)[0]
-                    if region < self.dataset.cur_region:
-                        eval_mse_backward.append(eval_mse)
+            # Evaluate on each region individually
+            regions = np.arange(self.dataset.num_regions)
+            eval_mse_backward = []
+            for region in regions:
+                eval_mse = self.eval(eval_coords=region, output_img=False)[0]
+                if region < self.dataset.cur_region:
+                    eval_mse_backward.append(eval_mse)
 
-                    # Log evaluation loss for each region
-                    psnr = mse2psnr(eval_mse)
-                    self._tb_writer.add_scalar(
-                        tag=f"eval/psnr_on_region{region}",
-                        scalar_value=psnr,
-                        global_step=self.step,
-                    )
+                # Log evaluation loss for each region
+                psnr = mse2psnr(eval_mse)
+                self._tb_writer.add_scalar(
+                    tag=f"eval/psnr_on_region{region}",
+                    scalar_value=psnr,
+                    global_step=self.step,
+                )
 
-                # Log evaluation loss for backward regions
-                if self.continual and len(eval_mse_backward) > 0:
-                    eval_mse_backward = np.mean(eval_mse_backward)
-                    psnr_backward = mse2psnr(eval_mse_backward)
-                    self._tb_writer.add_scalar(
-                        tag="eval/psnr_on_backward_regions",
-                        scalar_value=psnr_backward,
-                        global_step=self.step,
-                    )
+            # Log evaluation loss for backward regions
+            if self.continual and len(eval_mse_backward) > 0:
+                eval_mse_backward = np.mean(eval_mse_backward)
+                psnr_backward = mse2psnr(eval_mse_backward)
+                self._tb_writer.add_scalar(
+                    tag="eval/psnr_on_backward_regions",
+                    scalar_value=psnr_backward,
+                    global_step=self.step,
+                )
 
             # Record model output image on the full coordinate
             self._tb_writer.add_image(
