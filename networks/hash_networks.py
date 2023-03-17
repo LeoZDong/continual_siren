@@ -469,7 +469,9 @@ class HashNet(nn.Module):
         """
         bsz = coords.shape[0]
         if coords.shape[0] > max_batch:
-            out = torch.empty((bsz, 3), dtype=torch.float32, device=coords.device)
+            out = torch.empty(
+                (bsz, self.out_dim), dtype=torch.float32, device=coords.device
+            )
             i = 0
             while i < bsz:
                 out_batch = self.net(coords[i : min(i + max_batch, bsz)])
