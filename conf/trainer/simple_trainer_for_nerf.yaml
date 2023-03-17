@@ -2,3 +2,7 @@ defaults:
   - simple_trainer_for_hash
 
 _target_: "trainers.simple_trainer_nerf.SimpleTrainerNerf"
+
+gpu_if_available: true
+update_density_bitfield_every_steps: 16
+warmup_steps: 256
