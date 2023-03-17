@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Union
 
 import cv2
 import hydra
@@ -18,7 +18,7 @@ from data.region_simulators import RegionSimulator
 from utils import create_spheric_poses
 
 
-def read_image(img_path: str, img_wh: Tuple[int, int], blend_a: bool = True):
+def read_image(img_path: str, img_wh: Tuple[int, int], blend_a: bool = True) -> Tensor:
     # TODO: Combine this with `image_data.py` function
     img = io.imread(img_path).astype(np.float32) / 255
     if img.shape[2] == 4:  # blend A to RGB
@@ -33,18 +33,19 @@ def read_image(img_path: str, img_wh: Tuple[int, int], blend_a: bool = True):
     return img
 
 
-def get_ray_directions(H, W, K, random=False, return_uv=False, flatten=True):
+def get_ray_directions(
+    H: Tensor, W: Tensor, K: Tensor, random=False, return_uv=False, flatten=True
+) -> Union[Tensor, Tuple[Tensor, Tensor]]:
     """Get ray directions for all pixels in camera coordinate [right down front].
     Reference: https://www.scratchapixel.com/lessons/3d-basic-rendering/
                ray-tracing-generating-camera-rays/standard-coordinate-systems
-
-    Inputs:
+    Args:
         H, W: image height and width
         K: (3, 3) camera intrinsics
         random: whether the ray passes randomly inside the pixel
         return_uv: whether to return uv image coordinates
 
-    Outputs: (shape depends on @flatten)
+    Returns: (shape depends on @flatten)
         directions: (H, W, 3) or (H*W, 3), the direction of the rays in camera coordinate
         uv: (H, W, 2) or (H*W, 2) image coordinates
     """
@@ -74,16 +75,15 @@ def get_ray_directions(H, W, K, random=False, return_uv=False, flatten=True):
     return directions
 
 
-def get_rays(directions: Tensor, c2w: Tensor):
+def get_rays(directions: Tensor, c2w: Tensor) -> Tensor:
     """Get ray origin and directions in world coordinate for all pixels in one image.
     Reference: https://www.scratchapixel.com/lessons/3d-basic-rendering/
                ray-tracing-generating-camera-rays/standard-coordinate-systems
-
-    Inputs:
+    Args:
         directions: (N, 3) ray directions in camera coordinate
         c2w: (3, 4) or (N, 3, 4) transformation matrix from camera coordinate to world coordinate
 
-    Outputs:
+    Returns:
         rays_o: (N, 3), the origin of the rays in world coordinate
         rays_d: (N, 3), the direction of the rays in world coordinate
     """
@@ -111,7 +111,7 @@ class NeRFSyntheticDataset(Dataset):
         split: str,
         downsample: float,
         region_simulator: RegionSimulator,
-    ):
+    ) -> None:
         super().__init__()
         try:
             self.path = os.path.join(hydra.utils.get_original_cwd(), path)
@@ -130,7 +130,7 @@ class NeRFSyntheticDataset(Dataset):
         self.read_data(split)
 
         # Generate a set of poses for video generation
-        self.generate_video_poses()
+        self.generate_video_rays()
         # Number of frames / poses for generating the test time video
         num_frames_for_video = self.rays_o_video.shape[0]
         self._video_inputs = [
@@ -158,7 +158,7 @@ class NeRFSyntheticDataset(Dataset):
         self._input = self._input_regions[region]
         self._output = self._output_regions[region]
 
-    def read_intrinsics(self):
+    def read_intrinsics(self) -> None:
         """Read and store local camera intrinsics as instance variables.
         Instance variables:
             K: (3, 3, 3) Camera intrinsics matrix.
@@ -179,17 +179,22 @@ class NeRFSyntheticDataset(Dataset):
         )
         self.directions = get_ray_directions(self.img_h, self.img_w, self.K)
 
-    def read_data(self, split):
+    def read_data(self, split: str) -> None:
         """Read and store image frames and their corresponding poses.
         Instance variables:
             rays_o: (num_frames, h * w, 3) Origins of all rays in all image frames in
                 world coordinate.
             rays_d: (num_frames, h * w, 3) Corresponding ray directions.
             pixels: (num_frames, h * w, 3) RGB pixel values of each image frame (flattened).
+            poses: (num_frames, 3, 4) Camera pose (camera-to-world transformation matrix)
+                of each image frame. This is not used in training, but is handy for
+                sanity check where we could make the test video poses the same as
+                training poses.
         """
         self.rays_o = []
         self.rays_d = []
         self.pixels = []
+        self.poses = []
 
         with open(os.path.join(self.path, f"transforms_{split}.json"), "r") as f:
             frames = json.load(f)["frames"]
@@ -207,6 +212,7 @@ class NeRFSyntheticDataset(Dataset):
             # pose_radius_scale = 1.5
             pose_radius_scale = 1
             c2w[:, 3] /= torch.linalg.norm(c2w[:, 3]) / pose_radius_scale
+            self.poses.append(c2w)
 
             # Obtain rays in world coordinate
             rays_o, rays_d = get_rays(self.directions, c2w)
@@ -224,11 +230,28 @@ class NeRFSyntheticDataset(Dataset):
         self.rays_o = torch.stack(self.rays_o)  # (num_frames, h * w, 3)
         self.rays_d = torch.stack(self.rays_d)  # (num_frames, h * w, 3)
         self.pixels = torch.stack(self.pixels)  # (num_frames, h * w, 3)
+        self.poses = torch.stack(self.poses)  # (num_frames, 3, 4)
         self.mean_h = sum(heights) / len(heights)
 
-    def generate_video_poses(self):
-        c2ws = create_spheric_poses(radius=1.2, mean_h=self.mean_h, n_poses=120)
-        c2ws = torch.FloatTensor(c2ws)
+    def generate_video_rays(self) -> None:
+        """Generate rays to visualize a test time video."""
+        # Evaluate on 3 different heights
+        c2ws = []
+        for i in range(3):
+            # TODO: Mean height is not a great heuristic to get a good testing height.
+            # Figure out a better way?
+            # TODO: One way is to also get the mean pitch angle. Then we can use mean
+            # height + pitch angle
+            pose = torch.FloatTensor(
+                create_spheric_poses(
+                    radius=1, mean_h=self.mean_h / 5 * ((i + 1) / 3), n_poses=40
+                )
+            )
+            pose[:, :, 3] /= torch.linalg.norm(pose[:, :, 3], axis=1, keepdim=True)
+            c2ws.append(pose)
+
+        c2ws = torch.concatenate(c2ws)
+
         self.rays_o_video = []
         self.rays_d_video = []
 
@@ -240,11 +263,11 @@ class NeRFSyntheticDataset(Dataset):
         self.rays_o_video = torch.stack(self.rays_o_video)
         self.rays_d_video = torch.stack(self.rays_d_video)
 
-    def __len__(self):
+    def __len__(self) -> int:
         """Dataset size is defined as the total number pixels / rays."""
         return self.pixels.shape[0] * self.pixels.shape[1]
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx) -> Tuple[Dict[str, Tensor], Tensor]:
         """Given `idx`, we flatten it into `frame_idx` and `pixel_idx` and return
         information about one ray.
 
