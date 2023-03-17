@@ -1,5 +1,5 @@
-"""Test NeRF dataset by visualizing camera poses."""
-
+import matplotlib.pyplot as plt
+import numpy as np
 import plotly.graph_objs as go
 import torch
 
@@ -7,18 +7,7 @@ from data.nerf_data import NeRFSyntheticDataset
 from data.region_simulators import NeRFRegionSimulator
 
 
-def main():
-    region_simulator = NeRFRegionSimulator(
-        num_images_per_region=1, img_h=800, img_w=800
-    )
-
-    dataset = NeRFSyntheticDataset(
-        path="datasets/nerf_synthetic/lego",
-        split="train",
-        downsample=1,
-        region_simulator=region_simulator,
-    )
-
+def visualize_camera(dataset: NeRFSyntheticDataset):
     # Create a 3D scatter plot of arros
     fig = go.Figure()
 
@@ -74,6 +63,32 @@ def main():
 
     # Show the plot
     fig.show()
+
+
+def visualize_images(dataset: NeRFSyntheticDataset, n_visualize: int):
+    total_frames = dataset.pixels.shape[0]
+    frames = np.random.choice(total_frames, n_visualize)
+
+    for frame_i in frames:
+        frame = dataset.pixels[frame_i].reshape(dataset.img_h, dataset.img_w, 3).numpy()
+        plt.imshow(frame)
+        plt.show()
+
+
+def main():
+    region_simulator = NeRFRegionSimulator(
+        num_images_per_region=1, img_h=800, img_w=800
+    )
+
+    dataset = NeRFSyntheticDataset(
+        path="datasets/nerf_synthetic/lego",
+        split="train",
+        downsample=0.1,
+        region_simulator=region_simulator,
+    )
+
+    visualize_camera(dataset)
+    visualize_images(dataset, n_visualize=3)
 
 
 if __name__ == "__main__":
