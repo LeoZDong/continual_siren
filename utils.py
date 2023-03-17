@@ -336,17 +336,18 @@ def near_far_from_aabb(
     return t_near.unsqueeze(1), t_far.unsqueeze(1)
 
 
-def create_spheric_poses(radius, mean_h, n_poses):
-    """
-    Create circular poses around z axis.
-    Inputs:
+def create_spheric_poses(radius: float, mean_h: float, n_poses: int) -> np.ndarray:
+    """Create circular poses around z axis.
+    Args:
         radius: the (negative) height and the radius of the circle.
         mean_h: mean camera height
-    Outputs:
+
+    Returns:
         spheric_poses: (n_poses, 3, 4) the poses in the circular path
     """
 
-    def spheric_pose(theta, phi, radius):
+    def spheric_pose(theta: float, phi: float, radius: float) -> np.ndarray:
+        """Create one spheric pose given radius and rotation angles."""
         trans_t = lambda t: np.array(
             [[1, 0, 0, 0], [0, 1, 0, 2 * mean_h], [0, 0, 1, -t]]
         )
@@ -361,6 +362,8 @@ def create_spheric_poses(radius, mean_h, n_poses):
 
         c2w = rot_theta(theta) @ rot_phi(phi) @ trans_t(radius)
         c2w = np.array([[-1, 0, 0], [0, 0, 1], [0, 1, 0]]) @ c2w
+        # Reflect about y axis to turn upside-down
+        c2w[:, 1] *= -1
         return c2w
 
     spheric_poses = []
