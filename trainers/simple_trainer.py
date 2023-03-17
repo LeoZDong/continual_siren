@@ -322,7 +322,10 @@ class SimpleTrainer:
     def maybe_save_checkpoint(self, loss: Tensor) -> None:
         if self.is_final_step(self.step):
             name = f"final"
-        elif self.step % self.cfg.trainer.checkpoint_every_steps == 0:
+        elif (
+            self.cfg.trainer.checkpoint_every_steps
+            and self.step % self.cfg.trainer.checkpoint_every_steps == 0
+        ):
             name = f"ckpt_{self.step}"
         else:
             return
@@ -344,3 +347,86 @@ class SimpleTrainer:
     @property
     def need_to_switch_region(self) -> bool:
         return self.step and self.step % self.cfg.trainer.switch_region_every_steps == 0
+
+
+class SimpleTrainerGiga(SimpleTrainer):
+    """Same training procedure as SimpleTrainer. Different evaluation that is more
+    efficient for gigapixel images.
+    """
+
+    def maybe_eval_and_log(self) -> None:
+        """Evaluate and log evaluation summary if appropriate."""
+        if self.step % self.cfg.trainer.eval_every_steps == 0:
+            # Evaluate on the entire image
+            eval_mse_full, full_img_out, full_gt_img = self.eval(
+                eval_coords="full", output_img=True
+            )
+            # Log evaluation loss for the full image
+            psnr_full = mse2psnr(eval_mse_full)
+            self._tb_writer.add_scalar(
+                tag="eval/psnr_on_full_img",
+                scalar_value=psnr_full,
+                global_step=self.step,
+            )
+
+            # Only evaluate the current region and a *subset* of backwards regions
+            # (different from SimpleTrainer)
+            max_regions_to_eval = 16
+            regions = np.arange(self.dataset.cur_region + 1)
+            if len(regions) > max_regions_to_eval:
+                regions = np.random.choice(
+                    self.dataset.cur_region + 1, max_regions_to_eval
+                )
+            eval_mse_backward = []
+            for region in regions:
+                eval_mse = self.eval(eval_coords=region, output_img=False)[0]
+                if region < self.dataset.cur_region:
+                    eval_mse_backward.append(eval_mse)
+
+                # Log evaluation loss for each region
+                psnr = mse2psnr(eval_mse)
+                self._tb_writer.add_scalar(
+                    tag=f"eval/psnr_on_region{region}",
+                    scalar_value=psnr,
+                    global_step=self.step,
+                )
+
+            # Log evaluation loss for backward regions
+            if self.continual and len(eval_mse_backward) > 0:
+                eval_mse_backward = np.mean(eval_mse_backward)
+                psnr_backward = mse2psnr(eval_mse_backward)
+                self._tb_writer.add_scalar(
+                    tag="eval/psnr_on_backward_regions",
+                    scalar_value=psnr_backward,
+                    global_step=self.step,
+                )
+
+            # Record model output image on the full coordinate
+            self._tb_writer.add_image(
+                "full/eval_out_full", full_img_out, global_step=self.step
+            )
+            if self.step == self.cfg.trainer.eval_every_steps:
+                self._tb_writer.add_image(
+                    "full/gt_full", full_gt_img, global_step=self.step
+                )
+
+            # Print eval stats
+            log.info(f"step={self.step}, eval_psnr_full={round(psnr_full, 5)}")
+
+        if self.is_final_step(self.step):
+            eval_mse_full, full_img_out, full_gt_img = self.eval(
+                eval_coords="full", output_img=True
+            )
+
+            # Save image output in final step
+            torchvision.utils.save_image(
+                full_img_out, os.path.join(self._work_dir, "full_img_out.png")
+            )
+            torchvision.utils.save_image(
+                full_gt_img, os.path.join(self._work_dir, "full_gt_img.png")
+            )
+
+            # Record final performance in file
+            f = open("final_result.txt", "w")
+            f.write(f"psnr_full={mse2psnr(eval_mse_full)}\n")
+            f.close()

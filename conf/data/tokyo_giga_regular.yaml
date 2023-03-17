@@ -1,0 +1,9 @@
+defaults:
+  - "pluto_giga_regular"
+
+side_length: 1920 # 19456
+path: "datasets/gigapixel/tokyo_cropped.tif"
+
+# We try to normalize so that each region has size 128 x 128
+region_simulator:
+  divide_side_n: 15

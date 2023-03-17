@@ -6,7 +6,7 @@ from omegaconf import DictConfig
 from torch import Tensor, nn
 
 import utils
-from trainers.simple_trainer import SimpleTrainer
+from trainers.simple_trainer import SimpleTrainer, SimpleTrainerGiga
 
 log = logging.getLogger(__name__)
 
@@ -134,3 +134,7 @@ class HashFreezeTrainer(SimpleTrainer):
             except AssertionError as e:
                 log.error(f"Assertion error: {str(e)}")
                 raise
+
+
+class HashFreezeTrainerGiga(SimpleTrainerGiga, HashFreezeTrainer):
+    pass

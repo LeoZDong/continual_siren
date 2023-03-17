@@ -4,10 +4,11 @@ defaults:
 _target_: "data.image_data.ImageFitting"
 _recursive_: true
 
-# side_length: 19456
-# path: "datasets/gigapixel/tokyo_cropped.tif"
-side_length: 2000 # 8000
+# side_length: 2048 # 8000
+side_length: 1920 # 8000
 path: "datasets/gigapixel/pluto.jpg"
 
+# We try to normalize so that each region has size 128 x 128
 region_simulator:
-  divide_side_n: 100
+  # divide_side_n: 16
+  divide_side_n: 15

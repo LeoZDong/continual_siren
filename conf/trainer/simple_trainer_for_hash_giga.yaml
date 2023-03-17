@@ -1,0 +1,12 @@
+defaults:
+  - simple_trainer_for_hash
+
+_target_: "trainers.simple_trainer.SimpleTrainerGiga"
+_recursive_: false
+
+total_steps: 45000
+switch_region_every_steps: 200
+
+summary_every_steps: 200
+eval_every_steps: 200
+checkpoint_every_steps: 0
