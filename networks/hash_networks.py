@@ -76,8 +76,14 @@ class HashEmbedding(nn.Module):
                 batch of coordinates (concatenated).
         """
         x_embedding_multi_level = []
+
+        t_adj_v = 0
+        t_hash = 0
+        t_interpl = 0
+        # print(f"memory: {torch.cuda.memory_allocated(0) / (1024 * 1024)}")
         for i in range(self.n_levels):
             # Get adjacent vertices at this level's resolution
+            t = time.time()
             resolution = np.floor(
                 self.base_resolution * self.coarse_to_fine_factor**i
             )
@@ -91,16 +97,26 @@ class HashEmbedding(nn.Module):
                 grid_max=self.grid_max,
                 vertex_resolution=resolution,
             )
+            t_adj_v += time.time() - t
 
             # Query hash function and lookup table to get adjacent vertices' embeddings
+            t = time.time()
             vertex_indices_hash = self.spatial_hash(vertex_indices, resolution)
+            t_hash += time.time() - t
+
             vertex_embeddings = self.embeddings[i](vertex_indices_hash)
 
             # Interpolate adjacent vertices' embeddings to get x's embedding
+            t = time.time()
             x_embedding = utils.linear_interpolate(
                 x, min_vertex_coords, max_vertex_coords, vertex_values=vertex_embeddings
             )
             x_embedding_multi_level.append(x_embedding)
+            t_interpl += time.time() - t
+
+        # print(f"t_adj_v: {t_adj_v}")
+        # print(f"t_hash: {t_hash}")
+        # print(f"t_interpl: {t_interpl}")
 
         x_embedding_multi_level = torch.cat(x_embedding_multi_level, dim=-1)
         return x_embedding_multi_level
@@ -447,8 +463,21 @@ class HashNet(nn.Module):
         if isinstance(module, nn.Linear):
             nn.init.xavier_uniform_(module.weight)
 
-    def forward(self, coords: Tensor) -> Tensor:
-        return self.net(coords)
+    def forward(self, coords: Tensor, max_batch: int = 1024**2) -> Tensor:
+        """Forward pass to get RGB values given coordinates. If batch size exceeds
+        `max_batch`, do multiple forward passes.
+        """
+        bsz = coords.shape[0]
+        if coords.shape[0] > max_batch:
+            out = torch.empty((bsz, 3), dtype=torch.float32, device=coords.device)
+            i = 0
+            while i < bsz:
+                out_batch = self.net(coords[i : min(i + max_batch, bsz)])
+                out[i : min(i + max_batch, bsz)] = out_batch
+                i += max_batch
+            return out
+        else:
+            return self.net(coords)
 
     def to(self, device, **kwargs):
         self.hash_embedding.to(device, **kwargs)
