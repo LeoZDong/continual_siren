@@ -43,7 +43,8 @@ def get_img_tensor_square(img_path: str, side_length: int) -> Tensor:
     crop_x_r = side_length + crop_x_l
     crop_y_l = (img.shape[1] - side_length) // 2
     crop_y_r = side_length + crop_y_l
-    img = img[crop_x_l:crop_x_r, crop_y_l:crop_y_r, :]
+    # Also remove the alpha channel
+    img = img[crop_x_l:crop_x_r, crop_y_l:crop_y_r, :3]
 
     return img
 
