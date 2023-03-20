@@ -53,7 +53,9 @@ class RegularRegionSimulator(RegionSimulator):
 
         Returns:
             coords_regions: List of coordinate regions.
+                Each region has shape (num_points, spatial_dim).
             pixels_regions: List of pixels corresponding to each coordinate region.
+                Each region has shape (num_points, value_dim).
         """
         side_length = full_pixels.shape[0]
         spatial_dim = full_coords.shape[-1]
@@ -115,10 +117,10 @@ class RegularRegionSimulator(RegionSimulator):
 
 
 class RandomRegionSimulator(RegionSimulator):
-    """Random region simulator that produces square patches of size uniformly distributed
-    in [`region_size_min`, `region_size_max`]. Coordinates inside regions are continous
-    coordinates that might not match ground-truth in `full_coords`, in which case the
-    corresponding pixel values are interpolated.
+    """Random region simulator that produces rectangular patches of size uniformly
+    distributed in [`region_size_min`, `region_size_max`] (as int, since "size" is the
+    number of pixels on one side of the patch). A region contains ground-truth
+    coordinates. We ensure that all regions together cover the entire image.
     """
 
     def __init__(
@@ -134,43 +136,74 @@ class RandomRegionSimulator(RegionSimulator):
     def simulate_regions(
         self, full_coords: Tensor, full_pixels: Tensor
     ) -> Tuple[List[Tensor], List[Tensor]]:
-        """See `RegularRegionSimulator` for documentation."""
-        coords_regions = []
-        pixels_regions = []
+        """Repeatedly call `_simulate_regions` to simulate new regions until the entire
+        image is covered.
 
-        axes = (full_coords[:, 0, 0].numpy(), full_coords[0, :, 1].numpy())
-        interpolate = RegularGridInterpolator(
-            axes, full_pixels.numpy(), method="linear"
+        See `RegularRegionSimulator` for more documentation.
+        """
+        max_attempts = 10
+        for _ in range(max_attempts):
+            coords_regions, pixels_regions, all_covered = self._simulate_regions(
+                full_coords, full_pixels
+            )
+            if all_covered:
+                return coords_regions, pixels_regions
+
+        raise RuntimeError(
+            f"Region simulator cannot cover the full image using {self.num_regions} regions after {max_attempts} trials! Consider increasing `num_regions` or the region size!"
         )
 
-        coords_max = full_coords.max().item()
-        coords_min = full_coords.min().item()
-        spatial_dim = full_coords.shape[-1]
-        density = full_coords.shape[0] / (coords_max - coords_min)
+    def _simulate_regions(
+        self, full_coords: Tensor, full_pixels: Tensor
+    ) -> Tuple[List[Tensor], List[Tensor], bool]:
+        """Simulate `self.num_regions` regions and also keep track of whether the list
+        of simulated regions cover the entire image.
+        """
+        # Keep track of coverage (re-initialize when we do a new round of simulation)
+        coverage = torch.zeros(
+            (full_coords.shape[0], full_coords.shape[1]), dtype=torch.bool
+        )
+
+        coords_regions = []
+        pixels_regions = []
+        spatial_dim = full_coords.shape[2]
+        value_dim = full_pixels.shape[2]
 
         for _ in range(self.num_regions):
-            # Pick the size (side length) of the region
-            region_size = np.random.uniform(
-                low=self.region_size_min, high=self.region_size_max
+            # Pick the size of the region
+            region_w = np.random.randint(
+                low=self.region_size_min, high=self.region_size_max + 1
             )
-            # Pick the bottom left corner of the region
-            bottom_left = (
-                np.random.rand(spatial_dim) * (coords_max - coords_min - region_size)
-                + coords_min
+            region_h = np.random.randint(
+                low=self.region_size_min, high=self.region_size_max + 1
             )
 
-            # Randomly select coords within region and interpolate
-            num_coords = int((region_size * density) ** spatial_dim)
-            coords = np.random.uniform(
-                low=bottom_left,
-                high=bottom_left + region_size,
-                size=(num_coords, spatial_dim),
-            )
-            pixels = interpolate(coords)
-            coords_regions.append(torch.tensor(coords, dtype=full_coords.dtype))
-            pixels_regions.append(torch.tensor(pixels, dtype=full_pixels.dtype))
+            # Randomly sample an **uncovered** point as region center if not yet all covered
+            # NOTE: This is not iid sampling but makes it easier to cover the whole grid
+            if not torch.all(coverage):
+                not_covered = torch.nonzero(~coverage)
+                center = not_covered[np.random.randint(low=0, high=len(not_covered))]
+            else:
+                center = np.random.randint(
+                    low=0, high=full_coords.shape[0], size=(spatial_dim,)
+                )
 
-        return coords_regions, pixels_regions
+            # TODO: We may get ill-formed regions with length 0 with low probability
+            # While this is unlikely to happen, maybe add a guard in the future?
+            low_w = max(center[0] - region_w // 2, 0)
+            high_w = min(low_w + region_w, full_coords.shape[0])
+            low_h = max(center[1] - region_h // 2, 0)
+            high_h = min(low_h + region_h, full_coords.shape[1])
+
+            coords = full_coords[low_w:high_w, low_h:high_h, :].reshape(-1, spatial_dim)
+            pixels = full_pixels[low_w:high_w, low_h:high_h, :].reshape(-1, value_dim)
+            coverage[low_w:high_w, low_h:high_h] = True
+
+            coords_regions.append(coords)
+            pixels_regions.append(pixels)
+
+        all_covered = torch.all(coverage)
+        return coords_regions, pixels_regions, all_covered
 
 
 class NeRFRegionSimulator(RegionSimulator):
