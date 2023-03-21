@@ -221,7 +221,7 @@ class HashEmbeddingUnravel(HashEmbedding):
 
         return hash_indices
 
-    def to(self, device, **kwargs):
+    def to(self, device: torch.device, **kwargs):
         for resolution in self.strides.keys():
             self.strides[resolution] = self.strides[resolution].to(device)
         return super().to(device, **kwargs)
@@ -270,6 +270,10 @@ class HashEmbeddingMRU(HashEmbeddingUnravel):
         self.mru_size = int(mru_size)
 
         # TODO: These need to be saved as part of checkpoints!
+        # Implementation plan: Additionally store buffers for each dictionary (for each
+        # dict, store a keys tensor and a values tensor). Implement a `_sync_to_buffer`
+        # and `_sync_from_buffer` method, which is called in `state_dict` and `load_state_dict`
+        # overrides respectively.
         # Set of used coordinates
         self.used = {}
         # Queue of most recently (first) used coordinates
@@ -329,6 +333,7 @@ class HashEmbeddingMRU(HashEmbeddingUnravel):
                of a collision. We also save it as `collision_target` of this coordinate.
         """
         t = time.time()
+        device = vertex_indices.device
         primes = [
             1,
             2654435761,
@@ -351,11 +356,19 @@ class HashEmbeddingMRU(HashEmbeddingUnravel):
 
         # Add the non-overflow and first-use indices used set and MRU queue
         if self.training and resolution in self.used.keys():
-            used = torch.tensor(list(self.used[resolution]), dtype=torch.long)
+            used = torch.tensor(
+                list(self.used[resolution]),
+                dtype=torch.long,
+                device=device,
+            )
             non_overflow_indices = unravel_indices[~overflow]
-            first_used = non_overflow_indices[
-                torch.isin(non_overflow_indices, used, invert=True)
-            ].numpy()
+            first_used = (
+                non_overflow_indices[
+                    torch.isin(non_overflow_indices, used, invert=True)
+                ]
+                .cpu()
+                .numpy()
+            )
             self.add_to_mru(first_used, resolution)
             self.add_to_used(first_used, resolution)
 
@@ -380,9 +393,9 @@ class HashEmbeddingMRU(HashEmbeddingUnravel):
                 for dim in range(self.coord_dim):
                     xor_result ^= vertex_to_hash[..., dim] * primes[dim]
                 mru_indices = xor_result % len(self.most_recently_used[resolution])
-                collision_targets = torch.tensor(self.most_recently_used[resolution])[
-                    mru_indices
-                ]
+                collision_targets = torch.tensor(
+                    self.most_recently_used[resolution], device=device
+                )[mru_indices]
 
                 # Use newly computed collision targets
                 mask = overflow.clone()
@@ -405,7 +418,7 @@ class HashEmbeddingMRU(HashEmbeddingUnravel):
 
         return hash_indices
 
-    def to(self, device, **kwargs):
+    def to(self, device: torch.device, **kwargs):
         for resolution in self.collision_target.keys():
             self.collision_target[resolution] = self.collision_target[resolution].to(
                 device
@@ -481,7 +494,7 @@ class HashNet(nn.Module):
         else:
             return self.net(coords)
 
-    def to(self, device, **kwargs):
+    def to(self, device: torch.device, **kwargs):
         self.hash_embedding.to(device, **kwargs)
         return super().to(device, **kwargs)
 
@@ -515,6 +528,11 @@ class HashEmbeddingUnravelBlock(HashEmbedding):
         """Shift `x` into local coordinate first before querying."""
         x = (x + self.local_shift) * self.local_scale
         return super().forward(x)
+
+    def to(self, device: torch.device, **kwargs):
+        self.local_shift = self.local_shift.to(device)
+        self.local_scale = self.local_scale.to(device)
+        return super().to(device, **kwargs)
 
 
 class BlockHashNet(nn.Module):
@@ -611,3 +629,9 @@ class BlockHashNet(nn.Module):
 
         block_indices = (blocks * self.stride).sum(-1)
         return block_indices
+
+    def to(self, device: torch.device, **kwargs):
+        for hash_net in self.block_hash_nets:
+            hash_net.to(device)
+        self.stride = self.stride.to(device)
+        return super().to(device, **kwargs)
