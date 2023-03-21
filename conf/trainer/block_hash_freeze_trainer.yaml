@@ -1,0 +1,4 @@
+defaults:
+  - hash_freeze_trainer
+
+_target_: "trainers.hash_freeze_trainer.BlockHashFreezeTrainer"
