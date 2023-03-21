@@ -35,6 +35,8 @@ class HashFreezeTrainer(SimpleTrainer):
         ), "Freezing both hash encoding and MLP. This will not train at all!"
         assert self.freeze_at in ["init", "end_of_region0"]
 
+        self.frozen_param_sum = 0  # For checking that frozen parameters are not updated
+
         if self.freeze_at == "init":
             self.freeze_part_of_network(reinit_unfrozen_part=True)
 
@@ -59,7 +61,6 @@ class HashFreezeTrainer(SimpleTrainer):
             f"{'Re-initialize' if reinit_unfrozen_part else 'Do not re-initialize'} {'hash' if not self.freeze_hash else 'MLP'}!"
         )
 
-        self.frozen_param_sum = 0  # For checking that frozen parameters are not updated
         module_names = utils.get_module_names(self.network_to_freeze)
         named_modules_dict = dict(self.network_to_freeze.named_modules())
 
@@ -176,6 +177,8 @@ class BlockHashFreezeTrainer(HashFreezeTrainer):
         self.block_has_trained = torch.zeros(
             len(self.network.block_hash_nets), dtype=torch.bool, device=self.device
         )
+        # This is just for verifying that frozen parameters are not changed at the end
+        self.frozen_blocks = []
 
     def freeze_part_of_network(
         self,
@@ -199,6 +202,7 @@ class BlockHashFreezeTrainer(HashFreezeTrainer):
         for block_i in blocks_to_freeze:
             log.info(f"Select block {block_i} of network to freeze...")
             self.block_to_freeze = block_i
+            self.frozen_blocks.append(block_i)
             super().freeze_part_of_network(reinit_unfrozen_part=reinit_unfrozen_part)
 
     def maybe_switch_region(
@@ -234,7 +238,36 @@ class BlockHashFreezeTrainer(HashFreezeTrainer):
     def maybe_eval_and_log(self) -> None:
         """Skip checking by using SimpleTrainer's method."""
         # FIXME: Look into why we cannot pass checksum value checking in block HashNet!
-        return SimpleTrainer.maybe_eval_and_log(self)
+        SimpleTrainer.maybe_eval_and_log(self)
+        # Check that frozen parameters are never updated
+        # Probably remove in the future, but a cheap verification for now
+        if self.is_final_step(self.step + 1):
+            frozen_param_sum = 0
+            for block_i in self.frozen_blocks:
+                module_names = utils.get_module_names(
+                    self.network.block_hash_nets[block_i]
+                )
+                named_modules_dict = dict(
+                    self.network.block_hash_nets[block_i].named_modules()
+                )
+                for name in module_names:
+                    module = named_modules_dict[name]
+                    if self.cfg.trainer.freeze_hash and isinstance(
+                        module, nn.Embedding
+                    ):
+                        # Freeze hash encoding
+                        frozen_param_sum += module.weight.sum().item()
+                    elif self.cfg.trainer.freeze_mlp and isinstance(module, nn.Linear):
+                        # Freeze MLP
+                        frozen_param_sum += module.weight.sum().item()
+                        frozen_param_sum += module.bias.sum().item()
+            try:
+                assert (
+                    frozen_param_sum == self.frozen_param_sum
+                ), f"Frozen parameters before and after training have changed! Before: {self.frozen_param_sum}, after: {frozen_param_sum}"
+            except AssertionError as e:
+                log.error(f"Assertion error: {str(e)}")
+                raise
 
     @property
     def network_to_freeze(self) -> nn.Module:
