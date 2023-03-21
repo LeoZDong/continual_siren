@@ -36,14 +36,11 @@ class HashFreezeTrainer(SimpleTrainer):
         assert self.freeze_at in ["init", "end_of_region0"]
 
         if self.freeze_at == "init":
-            self.freeze_part_of_network(
-                reinit_unfrozen_part=True, reinit_optimizer=True
-            )
+            self.freeze_part_of_network(reinit_unfrozen_part=True)
 
     def freeze_part_of_network(
         self,
         reinit_unfrozen_part: bool,
-        reinit_optimizer: bool,
     ) -> None:
         """Freeze part of the network (either hash encoding or MLP), specified by the
         config. Optionally re-initialize the unfrozen part. This can be called either:
@@ -56,11 +53,6 @@ class HashFreezeTrainer(SimpleTrainer):
         Args:
             reinit_unfrozen_part: Whether to re-initialize the unfrozen part of the
                 network to train from scratch.
-            reinit_optimizer: Whether to re-initialize the optimizer to remove frozen
-                parameters. While setting `requires_grad=False` technically freezes a
-                parameter, it will still be slightly updated from stored momentum in the
-                optimizer. Re-initializing the optimizer removes this possibility, while
-                also losing the stored momentum for all parameters so far.
         """
         log.info(
             f"Freezing {'hash' if self.freeze_hash else 'MLP'} of the network at step {self.step}...\n"
@@ -71,8 +63,7 @@ class HashFreezeTrainer(SimpleTrainer):
         module_names = utils.get_module_names(self.network_to_freeze)
         named_modules_dict = dict(self.network_to_freeze.named_modules())
 
-        trainable_params = []
-
+        freeze_params = []
         for name in module_names:
             module = named_modules_dict[name]
             if self.cfg.trainer.freeze_hash:
@@ -80,13 +71,12 @@ class HashFreezeTrainer(SimpleTrainer):
                     # Freeze hash encoding
                     module.weight.requires_grad = False
                     self.frozen_param_sum += module.weight.sum().item()
+                    freeze_params.append(module.weight)
                 else:
                     if reinit_unfrozen_part:
                         # Re-initialize MLP
                         module.reset_parameters()
                         nn.init.xavier_uniform_(module.weight)
-                    trainable_params.append(module.weight)
-                    trainable_params.append(module.bias)
             elif self.cfg.trainer.freeze_mlp:
                 if isinstance(module, nn.Linear):
                     # Freeze MLP
@@ -94,20 +84,22 @@ class HashFreezeTrainer(SimpleTrainer):
                     module.bias.requires_grad = False
                     self.frozen_param_sum += module.weight.sum().item()
                     self.frozen_param_sum += module.bias.sum().item()
+                    freeze_params.append(module.weight)
+                    freeze_params.append(module.bias)
                 else:
                     if reinit_unfrozen_part:
                         # Re-initialize hash encoding
                         nn.init.uniform_(module.weight, a=-1e-4, b=1e-4)
-                    trainable_params.append(module.weight)
 
-        # Reset optimizer to contain only the trainable parameters
-        if reinit_optimizer:
-            self.optimizer = instantiate(
-                self.cfg.trainer.optimizer, params=trainable_params
-            )
-            self.lr_scheduler = instantiate(
-                self.cfg.trainer.lr_scheduler, optimizer=self.optimizer
-            )
+        # Reset optimizer to remove frozen parameters
+        current_params = [
+            param for group in self.optimizer.param_groups for param in group["params"]
+        ]
+        current_params = list(set(current_params) - set(freeze_params))
+        self.optimizer = instantiate(self.cfg.trainer.optimizer, params=current_params)
+        self.lr_scheduler = instantiate(
+            self.cfg.trainer.lr_scheduler, optimizer=self.optimizer
+        )
 
     def maybe_switch_region(
         self, model_input: Tensor, ground_truth: Tensor
@@ -116,9 +108,7 @@ class HashFreezeTrainer(SimpleTrainer):
         if self.freeze_at == "end_of_region0" and (
             self.dataset.cur_region == 0 and self.need_to_switch_region
         ):
-            self.freeze_part_of_network(
-                reinit_unfrozen_part=False, reinit_optimizer=True
-            )
+            self.freeze_part_of_network(reinit_unfrozen_part=False)
 
         return super().maybe_switch_region(model_input, ground_truth)
 
