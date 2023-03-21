@@ -592,7 +592,7 @@ class BlockHashNet(nn.Module):
             mask = block_indices == i
             if mask.sum() > 0:
                 coords_in_block = coords[mask]
-                output_block = self.block_hash_nets[i](coords_in_block)[0]
+                output_block = self.block_hash_nets[i](coords_in_block)
                 output[mask] = output_block
 
         return output
