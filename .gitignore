@@ -135,4 +135,6 @@ datasets/
 exp/
 
 .DS_Store
-exp_scheduled.sh
+
+# Shell scripts
+*.sh
