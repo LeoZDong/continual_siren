@@ -1,7 +1,11 @@
 """A set of custom functions calling CUDA backend for forward and backward pass."""
 
 import torch
-import vren  # Compiled CUDA backend for volumetric rendering
+
+try:
+    import vren  # Compiled CUDA backend for volumetric rendering
+except:
+    pass
 from einops import rearrange
 from torch.cuda.amp import custom_bwd, custom_fwd
 from torch_scatter import segment_csr
