@@ -28,9 +28,9 @@ nerf_network:
       grid_max: 1
       n_levels: 16
       n_features_per_entry: 2
-      log2_hashtable_size: 14
+      log2_hashtable_size: 19
       base_resolution: 16
-      finest_resolution: 512
+      finest_resolution: 4096
 
   direction_encoder:
     _target_: "networks.misc_networks.SHEncoder"
