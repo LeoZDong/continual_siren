@@ -3,7 +3,11 @@ from typing import Tuple
 
 import numpy as np
 import torch
-import vren  # Compiled CUDA backend for volumetric rendering
+
+try:
+    import vren  # Compiled CUDA backend for volumetric rendering
+except:
+    pass
 from einops import rearrange
 from kornia.utils.grid import create_meshgrid3d
 from torch import Tensor, nn
@@ -140,9 +144,7 @@ class NeRFRenderer(nn.Module):
         self.min_near = min_near
         self.num_steps_per_ray = num_steps_per_ray
         self.optimized_march_cuda = optimized_march_cuda
-
-        # TODO: Register parameters from the NeRF network?
-        super().add_module("nerf_network", nerf_network)
+        self.nerf_network = nerf_network
 
         # Prepare aabb with a 6D tensor (xmin, ymin, zmin, xmax, ymax, zmax)
         aabb_train = torch.tensor(
@@ -169,7 +171,7 @@ class NeRFRenderer(nn.Module):
         )
         self.register_buffer(
             "density_grid",
-            torch.ones(self.bitfield_cascades, self.density_grid_size**3),
+            torch.zeros(self.bitfield_cascades, self.density_grid_size**3),
         )
 
         self.register_buffer(
@@ -282,7 +284,6 @@ class NeRFRenderer(nn.Module):
         )
         color = color.reshape(bsz, num_steps, 3)
         # print(f"Color time: {time.time() - t}")
-
         ## Compute color for the entire ray ##
         t = time.time()
         pixels = torch.sum(weights.unsqueeze(-1) * color, dim=-2)  # (bsz, 3)
@@ -296,7 +297,7 @@ class NeRFRenderer(nn.Module):
 
         return pixels, depth
 
-    @torch.cuda.amp.autocast()
+    # @torch.cuda.amp.autocast()
     def _render_optimized_march_cuda(
         self,
         rays_o: Tensor,
@@ -395,7 +396,9 @@ class NeRFRenderer(nn.Module):
             return image, depth
 
         else:
-            return _render(rays_o, rays_d, num_steps=self.num_steps_per_ray, **kwargs)
+            return _render(
+                rays_o, rays_d, num_steps=self.num_steps_per_ray, perturb=True, **kwargs
+            )
 
     # ======== Methods used by optimized ray marching ========
     @torch.no_grad()
@@ -437,9 +440,13 @@ class NeRFRenderer(nn.Module):
                     len(indices2), (M,), device=self.density_grid.device
                 )
                 indices2 = indices2[rand_idx]
-            coords2 = vren.morton3D_invert(indices2.int())
-            # concatenate
-            cells += [(torch.cat([indices1, indices2]), torch.cat([coords1, coords2]))]
+                coords2 = vren.morton3D_invert(indices2.int())
+                # concatenate
+                cells += [
+                    (torch.cat([indices1, indices2]), torch.cat([coords1, coords2]))
+                ]
+            else:
+                cells += [(indices1, coords1)]
 
         return cells
 

@@ -1,5 +1,9 @@
 import torch
-import vren
+
+try:
+    import vren
+except:
+    pass
 from einops import rearrange
 
 from networks.nerf_custom_functions import RayMarcher, VolumeRenderer
@@ -56,7 +60,6 @@ def render_rays_test(
         # the number of samples to add on each ray
         N_samples = max(min(N_rays // N_alive, 64), min_samples)
         samples += N_samples
-        # print(f"Samples: {samples}")
 
         xyzs, dirs, deltas, ts, N_eff_samples = vren.raymarching_test(
             rays_o,
@@ -110,8 +113,7 @@ def render_rays_test(
     else:  # real
         rgb_bg = torch.zeros(3, device=device)
 
-    # TEMP: Ignore background color
-    # results["rgb"] += rgb_bg * rearrange(1 - opacity, "n -> n 1")
+    results["rgb"] += rgb_bg * rearrange(1 - opacity, "n -> n 1")
 
     return results
 
@@ -185,9 +187,8 @@ def render_rays_train(
         else:
             rgb_bg = torch.zeros(3, device=rays_o.device)
 
-    # TEMP: Ignore background color
-    # results["rgb"] = results["rgb"] + rgb_bg * rearrange(
-    #     1 - results["opacity"], "n -> n 1"
-    # )
+    results["rgb"] = results["rgb"] + rgb_bg * rearrange(
+        1 - results["opacity"], "n -> n 1"
+    )
 
     return results

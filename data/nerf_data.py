@@ -33,6 +33,7 @@ def read_image(img_path: str, img_wh: Tuple[int, int], blend_a: bool = True) -> 
     return img
 
 
+# @torch.cuda.amp.autocast(dtype=torch.float32)
 def get_ray_directions(
     H: Tensor, W: Tensor, K: Tensor, random=False, return_uv=False, flatten=True
 ) -> Union[Tensor, Tuple[Tensor, Tensor]]:
@@ -75,6 +76,7 @@ def get_ray_directions(
     return directions
 
 
+# @torch.cuda.amp.autocast(dtype=torch.float32)
 def get_rays(directions: Tensor, c2w: Tensor) -> Tensor:
     """Get ray origin and directions in world coordinate for all pixels in one image.
     Reference: https://www.scratchapixel.com/lessons/3d-basic-rendering/
@@ -209,8 +211,8 @@ class NeRFSyntheticDataset(Dataset):
 
             # NOTE: leaving this here as `ngp_pl` has it. But having scale be 1 makes
             # the cameras all within the [-1, 1] bound (on x and y; within [0, 1] on z).
-            # pose_radius_scale = 1.5
-            pose_radius_scale = 1
+            pose_radius_scale = 1.5
+            # pose_radius_scale = 1
             c2w[:, 3] /= torch.linalg.norm(c2w[:, 3]) / pose_radius_scale
             self.poses.append(c2w)
 
@@ -235,6 +237,11 @@ class NeRFSyntheticDataset(Dataset):
 
     def generate_video_rays(self) -> None:
         """Generate rays to visualize a test time video."""
+        #### TEMP: Use train poses as video poses ####
+        self.rays_o_video = self.rays_o
+        self.rays_d_video = self.rays_d
+        return
+
         # Evaluate on 3 different heights
         c2ws = []
         for i in range(3):

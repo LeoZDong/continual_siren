@@ -43,9 +43,13 @@ class SimpleTrainer:
             self.device = torch.device("cpu")
         self.network.to(self.device)
 
+        # TODO: Formally compare if fused adam gives any speed improvement
         self.optimizer = instantiate(
-            self.cfg.trainer.optimizer, params=self.network.parameters()
+            self.cfg.trainer.optimizer,
+            params=self.network.parameters(),
+            fused=torch.float32,
         )
+
         self.lr_scheduler = instantiate(
             self.cfg.trainer.lr_scheduler, optimizer=self.optimizer
         )
@@ -68,10 +72,12 @@ class SimpleTrainer:
 
         # Only used in non-continual setting: randomly sample points from the full grid
         # Each "batch" has the same number of points as *one* region in the continual case.
-        # TODO: Make the 6400 max batch size configurable?
+        # TODO: Make this configurable
+        # max_batch = 262144
+        max_batch = 4096
         self.dataloader = data.DataLoader(
             self.dataset,
-            batch_size=min(len(self.dataset) // self.dataset.num_regions, 6400),
+            batch_size=min(len(self.dataset) // self.dataset.num_regions, max_batch),
             shuffle=True,
         )
         self.dataloader_iter = iter(self.dataloader)

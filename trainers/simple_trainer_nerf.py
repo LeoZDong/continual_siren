@@ -47,6 +47,9 @@ class SimpleTrainerNerf(SimpleTrainer):
 
         progress_bar = tqdm(total=self.total_steps)
         while self.step < self.total_steps:
+            # Extra book-keeping for optimized CUDA ray marching
+            self.maybe_update_density_bitfield()
+
             model_input, ground_truth = self.get_next_step_data(
                 model_input, ground_truth
             )
@@ -62,9 +65,6 @@ class SimpleTrainerNerf(SimpleTrainer):
             self.step += 1
             progress_bar.update(1)
 
-            # Extra book-keeping for optimized CUDA ray marching
-            self.maybe_update_density_bitfield()
-
             # Evaluate
             self.maybe_eval_and_log()
 
@@ -77,8 +77,7 @@ class SimpleTrainerNerf(SimpleTrainer):
     def maybe_update_density_bitfield(self):
         if (
             self.network.optimized_march_cuda
-            and self.step == 1
-            or self.step % self.update_density_bitfield_every_steps == 0
+            and self.step % self.update_density_bitfield_every_steps == 0
         ):
             # TODO: Configure?
             MAX_SAMPLES = 1024
@@ -155,6 +154,8 @@ class SimpleTrainerNerf(SimpleTrainer):
             # Convert to uint
             img_out = (img_out * 255).astype(np.uint8)
             video_frames.append(img_out)
+            #### TEMP: Only Eval for first image! ####
+            break
 
         self.network.train()
         return video_frames
