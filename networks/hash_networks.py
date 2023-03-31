@@ -109,7 +109,11 @@ class HashEmbedding(nn.Module):
             # Interpolate adjacent vertices' embeddings to get x's embedding
             t = time.time()
             x_embedding = utils.linear_interpolate(
-                x, min_vertex_coords, max_vertex_coords, vertex_values=vertex_embeddings
+                x,
+                min_vertex_coords,
+                max_vertex_coords,
+                vertex_values=vertex_embeddings,
+                resolution=resolution,
             )
             x_embedding_multi_level.append(x_embedding)
             t_interpl += time.time() - t
@@ -308,6 +312,8 @@ class HashEmbeddingMRU(HashEmbeddingUnravel):
         self.most_recently_used[resolution].extendleft(indices)
 
         # Remove tail (right) of the MRU queue
+        #### TEMP: Change MRU size based on resolution ####
+        # mru_size = int((resolution // 8) ** 2)
         for _ in range(
             max(len(self.most_recently_used[resolution]) - self.mru_size, 0)
         ):

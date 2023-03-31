@@ -192,6 +192,7 @@ def linear_interpolate(
     min_vertex_coords: Tensor,
     max_vertex_coords: Tensor,
     vertex_values: Tensor,
+    resolution: int,
 ) -> Tensor:
     """Linear interpolation for either 2D (bilinear) or 3D (trilinear).
     Args:
@@ -205,6 +206,11 @@ def linear_interpolate(
     Returns:
         (bsz, dim): Interpolated values for coordinates `x`.
     """
+    # TODO: We can optionally offset x by 0.5 * (max_vertex_coords - min_vertex_coord),
+    # i.e. half of the voxel size, to prevent zero gradients when we perfectly align
+    # with the grid vertices.
+    # x += 0.5 * (1 / resolution)
+
     if x.shape[1] == 2:
         return linear_interpolate_2D(
             x, min_vertex_coords, max_vertex_coords, vertex_values
@@ -226,9 +232,6 @@ def linear_interpolate_2D(
     vertices in `vertex_values` are ordered as:
         [Q11, Q12, Q21, Q22]
     """
-    # TODO: We can optionally offset x by 0.5 * (max_vertex_coords - min_vertex_coord),
-    # i.e. half of the voxel size, to prevent zero gradients when we perfectly align
-    # with the grid vertices.
     weights_left = (x - min_vertex_coords) / (max_vertex_coords - min_vertex_coords)
     weights_right = (max_vertex_coords - x) / (max_vertex_coords - min_vertex_coords)
 
@@ -259,7 +262,6 @@ def linear_interpolate_3D(
     vertices in `vertex_values` are ordered as:
         [c000, c001, c010, c011, c100, c101, c110, c111]
     """
-    # TODO: As with 2D interpolation, we can optionally offset x
     weights = (x - min_vertex_coords) / (max_vertex_coords - min_vertex_coords)
 
     # Interpolate along first axis
