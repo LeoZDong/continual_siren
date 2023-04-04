@@ -16,6 +16,7 @@ lr_scheduler:
 
 continual: True
 l1_lambda: 0
+max_batch: 65536
 
 total_steps: 1000
 gpu_if_available: True

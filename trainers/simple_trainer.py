@@ -29,7 +29,8 @@ class SimpleTrainer:
         self.total_steps = int(self.cfg.trainer.total_steps)
         self.continual = self.cfg.trainer.continual
         self.network = instantiate(cfg.network)
-        self.dataset = instantiate(cfg.data)
+        self.dataset = instantiate(cfg.data, continual=self.continual)
+        self.max_batch = cfg.trainer.max_batch
 
         # Set device
         if not cfg.trainer.gpu_if_available:
@@ -47,7 +48,7 @@ class SimpleTrainer:
         self.optimizer = instantiate(
             self.cfg.trainer.optimizer,
             params=self.network.parameters(),
-            fused=torch.float32,
+            # fused=torch.float32,
         )
 
         self.lr_scheduler = instantiate(
@@ -73,11 +74,12 @@ class SimpleTrainer:
         # Only used in non-continual setting: randomly sample points from the full grid
         # Each "batch" has the same number of points as *one* region in the continual case.
         # TODO: Make this configurable
-        # max_batch = 262144
-        max_batch = 4096
         self.dataloader = data.DataLoader(
             self.dataset,
-            batch_size=min(len(self.dataset) // self.dataset.num_regions, max_batch),
+            batch_size=min(
+                len(self.dataset.full_output) // self.dataset.num_regions,
+                self.max_batch,
+            ),
             shuffle=True,
         )
         self.dataloader_iter = iter(self.dataloader)
@@ -86,16 +88,14 @@ class SimpleTrainer:
         # Prepare data:
         # Only used in continual setting: return all points in the current region.
         # Each "batch" is all points in the current region.
-        model_input, ground_truth = self.dataset.input, self.dataset.output
-        model_input, ground_truth = move_to(model_input, self.device), move_to(
-            ground_truth, self.device
-        )
+        # model_input, ground_truth = self.dataset.input, self.dataset.output
+        # model_input, ground_truth = move_to(model_input, self.device), move_to(
+        #     ground_truth, self.device
+        # )
 
         progress_bar = tqdm(total=self.total_steps)
         while self.step < self.total_steps:
-            model_input, ground_truth = self.get_next_step_data(
-                model_input, ground_truth
-            )
+            model_input, ground_truth = self.get_next_step_data()
 
             model_output = self.network(**model_input)
             loss = self.loss(model_output, ground_truth)
@@ -194,32 +194,27 @@ class SimpleTrainer:
             loss += self.l1_lambda * l1_norm
         return loss
 
-    def get_next_step_data(
-        self, model_input: Tensor, ground_truth: Tensor
-    ) -> Tuple[Tensor, Tensor]:
+    def get_next_step_data(self) -> Tuple[Tensor, Tensor]:
         """Get data for the next training step.
         In the continual case, data for the next step does not change unless we need
-            to switch to a differen region.
+            to switch to a differen region (unless batched).
         In the non-continual case, data for the next step is the next batch of randomly
             sampled points in the full grid.
         """
         if self.continual:
-            # TODO: Set a maximum batch for continual!!
-            return self.maybe_switch_region(model_input, ground_truth)
-        else:
-            # Look out for stop iteration
-            try:
-                model_input, ground_truth = next(self.dataloader_iter)
-            except StopIteration:
-                self.dataloader_iter = iter(self.dataloader)
-                model_input, ground_truth = next(self.dataloader_iter)
+            self.maybe_switch_region()
 
-            # Move to target device
-            return move_to(model_input, self.device), move_to(ground_truth, self.device)
+        # Look out for stop iteration
+        try:
+            model_input, ground_truth = next(self.dataloader_iter)
+        except StopIteration:
+            self.dataloader_iter = iter(self.dataloader)
+            model_input, ground_truth = next(self.dataloader_iter)
 
-    def maybe_switch_region(
-        self, model_input: Tensor, ground_truth: Tensor
-    ) -> Tuple[Tensor, Tensor]:
+        # Move to target device
+        return move_to(model_input, self.device), move_to(ground_truth, self.device)
+
+    def maybe_switch_region(self) -> None:
         """Switch to new region for training if appropriate.
         Args:
             model_input, ground_truth: Current feature-label pair.
@@ -233,10 +228,8 @@ class SimpleTrainer:
                 f"step={self.step}. Switching region from {self.dataset.cur_region} to {new_region}!"
             )
             self.dataset.set_cur_region(new_region)
-            model_input, ground_truth = self.dataset.input, self.dataset.output
-            return move_to(model_input, self.device), move_to(ground_truth, self.device)
-        else:
-            return model_input, ground_truth
+            # Re-initialize iterator to go through the new region from start
+            self.dataloader_iter = iter(self.dataloader)
 
     def maybe_log(self, loss: Tensor) -> None:
         """Log training summary if appropriate."""

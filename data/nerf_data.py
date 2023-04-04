@@ -116,7 +116,13 @@ class NeRFSyntheticDataset(Dataset):
         downsample: float,
         use_test_split_for_video: bool,
         region_simulator: RegionSimulator,
+        continual: bool,
     ) -> None:
+        """Initialize a NeRF synthetic dataset.
+        Args:
+            continual: If True, __len__ and __getitem__ pick from the current region.
+                Else, they pick from the full available dataset.
+        """
         super().__init__()
         try:
             self.path = os.path.join(hydra.utils.get_original_cwd(), path)
@@ -124,6 +130,7 @@ class NeRFSyntheticDataset(Dataset):
             self.path = path
         self.downsample = downsample
         self.region_simulator = region_simulator
+        self.continual = continual
 
         # Fixed values for NeRF Synthetic dataset
         self.img_w = int(img_w * self.downsample)
@@ -312,7 +319,10 @@ class NeRFSyntheticDataset(Dataset):
 
     def __len__(self) -> int:
         """Dataset size is defined as the total number pixels / rays."""
-        return self.pixels.shape[0] * self.pixels.shape[1]
+        if self.continual:
+            return self.output.shape[0]
+        else:
+            return self.full_output.shape[0]
 
     def __getitem__(self, idx) -> Tuple[Dict[str, Tensor], Tensor]:
         """Given `idx`, we flatten it into `frame_idx` and `pixel_idx` and return
@@ -323,16 +333,16 @@ class NeRFSyntheticDataset(Dataset):
                    'poses': (3, 4) Pose of camera (camera-to-world transform matrix).
             Output: (3, ) Pixel value of this ray.
         """
-        frame_idx = idx // self.pixels.shape[1]
-        pixel_idx = idx % self.pixels.shape[1]
-
-        return (
-            {
-                "rays_o": self.rays_o[frame_idx, pixel_idx],
-                "rays_d": self.rays_d[frame_idx, pixel_idx],
-            },
-            self.pixels[frame_idx, pixel_idx],
-        )
+        if self.continual:
+            return {
+                "rays_o": self.input["rays_o"][idx],
+                "rays_d": self.input["rays_d"][idx],
+            }, self.output[idx]
+        else:
+            return {
+                "rays_o": self.full_input["rays_o"][idx],
+                "rays_d": self.full_input["rays_d"][idx],
+            }, self.full_output[idx]
 
     @property
     def cur_region(self) -> int:

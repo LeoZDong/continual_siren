@@ -104,16 +104,14 @@ class HashFreezeTrainer(SimpleTrainer):
             self.cfg.trainer.lr_scheduler, optimizer=self.optimizer
         )
 
-    def maybe_switch_region(
-        self, model_input: Tensor, ground_truth: Tensor
-    ) -> Tuple[Tensor, Tensor]:
+    def maybe_switch_region(self) -> None:
         """Overwrite to freeze part of the network when appropriate."""
         if self.freeze_at == "end_of_region0" and (
             self.dataset.cur_region == 0 and self.need_to_switch_region
         ):
             self.freeze_part_of_network(reinit_unfrozen_part=False)
 
-        return super().maybe_switch_region(model_input, ground_truth)
+        super().maybe_switch_region()
 
     def maybe_eval_and_log(self) -> None:
         """Overwrite to check that frozen parameters are not changed at last step."""

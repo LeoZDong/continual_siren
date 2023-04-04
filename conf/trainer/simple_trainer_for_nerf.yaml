@@ -3,6 +3,7 @@ defaults:
 
 _target_: "trainers.simple_trainer_nerf.SimpleTrainerNerf"
 
+max_batch: 4096
 gpu_if_available: true
 update_density_bitfield_every_steps: 16
 warmup_steps: 256

@@ -35,6 +35,7 @@ class EWCTrainer(RegularizeTrainer):
     def maybe_switch_region(
         self, model_input: Tensor, ground_truth: Tensor
     ) -> Tuple[Tensor, Tensor]:
+        # FIXME: This will break with the newest trainer format
         if self.need_to_switch_region:
             # Set importance and reference model when we are about to switch to the
             # next region. At this point, `model_input` and `ground_truth` still

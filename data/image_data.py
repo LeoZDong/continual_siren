@@ -59,6 +59,7 @@ class ImageFitting(Dataset):
         side_length: int,
         path: str,
         region_simulator: RegionSimulator,
+        continual: bool,
     ):
         """Initialize an image fitting dataset.
         Args:
@@ -67,6 +68,8 @@ class ImageFitting(Dataset):
             id: ID of the single image to use.
             region_simulator: Region simulator object to simulate regions that will be
                 trained sequentially under continual learning.
+            continual: If True, __len__ and __getitem__ pick from the current region.
+                Else, they pick from the full available dataset.
         """
         super().__init__()
         spatial_dim = 2
@@ -81,6 +84,7 @@ class ImageFitting(Dataset):
             self.coords_regions,
             self.pixels_regions,
         ) = region_simulator.simulate_regions(self.full_coords, self.full_pixels)
+        self.continual = continual
 
         # Change input regions to dictionary format
         for i in range(len(self.coords_regions)):
@@ -99,18 +103,24 @@ class ImageFitting(Dataset):
         self.coords = self.coords_regions[self.cur_region]
 
     def __len__(self):
-        """Number of pixels in *full* grid."""
-        return self.full_pixels.shape[0]
+        """Number of pixels in either the current or full grid."""
+        if self.continual:
+            return self.output.shape[0]
+        else:
+            return self.full_output.shape[0]
 
     def __getitem__(self, idx) -> Tuple[Dict[str, Tensor], Tensor]:
-        """Return pixel at any coordinate on the *full* grid.
+        """Return pixel at a coordinate either on the current or full grid.
 
         Returns: 2-tuple for input and output. Input is kwargs dictionary to feed into
         the network. Output is a tensor to match the network output.
             Input: 'coords': (2,) Coordinate in image.
             Output: (3,) Pixel value of this ray.
         """
-        return ({"coords": self.full_coords[idx]}, self.full_pixels[idx])
+        if self.continual:
+            return {"coords": self.input["coords"][idx]}, self.output[idx]
+        else:
+            return {"coords": self.full_input["coords"][idx]}, self.full_output[idx]
 
     @property
     def cur_region(self) -> int:
