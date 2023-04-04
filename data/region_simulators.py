@@ -206,17 +206,16 @@ class RandomRegionSimulator(RegionSimulator):
         return coords_regions, pixels_regions, all_covered
 
 
-class NeRFRegionSimulator(RegionSimulator):
+class RegularNeRFRegionSimulator(RegionSimulator):
     def __init__(
         self,
-        num_images_per_region: int,
-        img_h: int,
-        img_w: int,
+        divide_side_n: int,
+        aabb_min: float,
+        aabb_max: float,
     ):
-        self.num_images_per_region = num_images_per_region
-        # Not used for not; needed later when one image is further divided into regions
-        self.img_h = img_h
-        self.img_w = img_w
+        self.divide_side_n = divide_side_n
+        self.aabb_min = aabb_min
+        self.aabb_max = aabb_max
 
     def simulate_regions(
         self, full_input: Dict[str, Tensor], full_output: Tensor
@@ -238,16 +237,39 @@ class NeRFRegionSimulator(RegionSimulator):
         input_regions = []
         output_regions = []
 
-        num_frames = full_input["rays_o"].shape[0]
-        for frame_idx in range(num_frames):
-            # Pose is expanded to one pose per ray, even though poses for all rays are
-            # the same. Using `expand` does not allocate more memory.
-            input = {
-                "rays_o": full_input["rays_o"][frame_idx],
-                "rays_d": full_input["rays_d"][frame_idx],
-            }
-            output = full_output[frame_idx]
-            input_regions.append(input)
-            output_regions.append(output)
+        # Gather frames for each region
+        num_frames = full_output.shape[0]
+        side_len = self.aabb_max - self.aabb_min
+        for i in range(self.divide_side_n):
+            for j in range(self.divide_side_n):
+                x_bound = [
+                    self.aabb_min + i * side_len / self.divide_side_n,
+                    self.aabb_min + (i + 1) * side_len / self.divide_side_n,
+                ]
+                y_bound = [
+                    self.aabb_min + j * side_len / self.divide_side_n,
+                    self.aabb_min + (j + 1) * side_len / self.divide_side_n,
+                ]
+
+                input = {"rays_o": [], "rays_d": []}
+                output = []
+                # This is not very efficient, but okay for a small number of frames
+                for frame_idx in range(num_frames):
+                    # Use the first ray's xy as the frame's xy
+                    x, y = full_input["rays_o"][frame_idx][0][:2].numpy()
+                    if (
+                        x > x_bound[0]
+                        and x < x_bound[1]
+                        and y > y_bound[0]
+                        and y < y_bound[1]
+                    ):
+                        input["rays_o"].append(full_input["rays_o"][frame_idx])
+                        input["rays_d"].append(full_input["rays_d"][frame_idx])
+                        output.append(full_output[frame_idx])
+                input["rays_o"] = torch.concat(input["rays_o"])
+                input["rays_d"] = torch.concat(input["rays_d"])
+                output = torch.concat(output)
+                input_regions.append(input)
+                output_regions.append(output)
 
         return input_regions, output_regions
