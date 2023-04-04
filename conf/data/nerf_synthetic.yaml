@@ -5,5 +5,8 @@ _target_: "data.nerf_data.NeRFSyntheticDataset"
 _recursive_: true
 
 path: "datasets/nerf_synthetic/lego"
-split: "train"
+split: ["train", "val"]
+img_w: 800
+img_h: 800
 downsample: 0.1
+use_test_split_for_video: true
