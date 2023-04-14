@@ -1,0 +1,12 @@
+name: "nerf_mru"
+
+defaults:
+  - nerf_unravel
+
+nerf_network:
+  density_net:
+    hash_embedding:
+      _target_: "networks.hash_networks.HashEmbeddingMRUGrid"
+      mru_size: 10000
+      mru_grid_resolution: 128
+      permute_on_the_fly: true

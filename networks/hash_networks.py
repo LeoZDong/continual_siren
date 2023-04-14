@@ -312,8 +312,6 @@ class HashEmbeddingMRU(HashEmbeddingUnravel):
         self.most_recently_used[resolution].extendleft(indices)
 
         # Remove tail (right) of the MRU queue
-        #### TEMP: Change MRU size based on resolution ####
-        # mru_size = int((resolution // 8) ** 2)
         for _ in range(
             max(len(self.most_recently_used[resolution]) - self.mru_size, 0)
         ):
@@ -325,10 +323,10 @@ class HashEmbeddingMRU(HashEmbeddingUnravel):
         permute them (permutation is fixed at initialization), which is very important
         to ensure the collision targets are not spatially biased.
 
-        For indices that do not exceed the hash table size:
+        For indices that do not exceed the hash table size (non-overflow indices):
             1. They are directly used as hash indices for the hash embeddings
             2. For the first-used indices, we add them to `used` set and MRU queue
-        For indices that exceed the hash table size:
+        For indices that exceed the hash table size (overflow indices):
             1. Find the collision target. For a coordinate with unraveled index `idx`,
                we look at entry `idx - hashtable_size` of `collision_target`. If the
                target is not -1, we directly use the collision target as hash index.
@@ -337,8 +335,11 @@ class HashEmbeddingMRU(HashEmbeddingUnravel):
                the value from the MRU queue at index `mru_index`. In other words, we
                treat the MRU queue as a hash table of hash embedding indices in case
                of a collision. We also save it as `collision_target` of this coordinate.
+
+        Args:
+            vertex_indices: (bsz, num_vertices, 2 or 3)
+        Returns: hash_indices (bsz, num_vertices)
         """
-        t = time.time()
         device = vertex_indices.device
         primes = [
             1,
@@ -356,9 +357,6 @@ class HashEmbeddingMRU(HashEmbeddingUnravel):
 
         overflow = unravel_indices >= (2**self.log2_hashtable_size)
         overflow_size = overflow.sum()
-
-        # print(f"Set up time: {time.time() - t}")
-        t = time.time()
 
         # Add the non-overflow and first-use indices used set and MRU queue
         if self.training and resolution in self.used.keys():
@@ -379,9 +377,6 @@ class HashEmbeddingMRU(HashEmbeddingUnravel):
             self.add_to_used(first_used, resolution)
 
         hash_indices = unravel_indices
-
-        # print(f"Used set and MRU queue time: {time.time() - t}")
-        t = time.time()
 
         if overflow_size > 0:
             collision_target_entries = (
@@ -420,8 +415,6 @@ class HashEmbeddingMRU(HashEmbeddingUnravel):
                 collision_target_entries
             ][~need_to_compute]
 
-        # print(f"Overflow time: {time.time() - t}")
-
         return hash_indices
 
     def to(self, device: torch.device, **kwargs):
@@ -438,6 +431,460 @@ class HashEmbeddingMRU(HashEmbeddingUnravel):
         return super().to(device, **kwargs)
 
 
+class HashEmbeddingMRUGrid(HashEmbeddingUnravel):
+    def __init__(
+        self,
+        mru_size: int,
+        mru_grid_resolution: int,
+        permute_on_the_fly: bool,
+        **kwargs,
+    ) -> None:
+        """A 'lossy' version of MRU hash embedding. In MRU, we need to store the computed
+        hash collision targets explicitly as `self.collision_target`, which maps each
+        (overflow) grid point to a collision target. This grows geometrically to the
+        finest resolution. In MRUGrid, we store the computed hash collision targets
+        implicitly as `self.collision_base_and_bound`, which maps each MRU voxel to a
+        collision range, from which the collision target is then computed. This grows
+        geometrically to the MRU grid resolution (typically much smaller than finest
+        resolution in 3D). See `spatial_hash` method docstring for detailed operations.
+
+        Note that now the MRU queue stores the entire MRU history, not just the top
+        `mru_size` values. This is tractable because the MRU history is at most as large
+        as the hash table size (as it only stores non-overflow indices).
+
+        Args:
+            mru_size: 'Size' of the MRU queue. This is actually used in computing bound
+                for the first time, as we do no truncate the MRU.
+            mru_grid_resolution: Resolution of the MRU grid.
+            permute_on_the_fly: If True, compute unravel indices permutation on-the-fly
+                using feistel cipher.
+        """
+
+        super().__init__(**kwargs)
+        self.mru_size = int(mru_size)
+        self.mru_grid_resolution = mru_grid_resolution
+        self.permute_on_the_fly = permute_on_the_fly
+
+        if permute_on_the_fly:
+            # Initialize CUDA extension to compute permutation on-the-fly
+            self.init_feistel_permute()
+            self.init_kensler_permute()
+        else:
+            # Pre-compute and store the permutation of unraveled indices
+            # This can be too large for 3D
+            self.unravel_indices_permute = {}  # This is too large!
+
+        # Pre-compute the strides for MRU grid (different shape than `stride`)
+        self.mru_grid_stride = torch.ones([1, self.coord_dim], dtype=torch.long)
+        s = 1
+        for dim in range(self.coord_dim):
+            self.mru_grid_stride[..., dim] = s
+            s *= mru_grid_resolution
+
+        # TODO: These need to be saved as part of checkpoints!
+        # Set of used (non-collider) coordinates
+        self.used = {}  # Bounded by hash table size
+        # Queue of most recently (first) used coordinates
+        self.most_recently_used = {}  # Bounded by hash table size
+        # Map MRU voxel index to collision target range
+        self.collision_base_and_bound = {}  # Bounded by `mru_grid_resolution`
+
+        for resolution in self.strides.keys():
+            if resolution**self.coord_dim > 2**self.log2_hashtable_size:
+                self.used[resolution] = set()
+                self.most_recently_used[resolution] = torch.empty(
+                    (0,), dtype=torch.long
+                )
+                self.collision_base_and_bound[resolution] = -torch.ones(
+                    (int(self.mru_grid_resolution**self.coord_dim), 2),
+                    dtype=torch.long,
+                )
+
+            # TODO: Change to Feistel cipher implementation
+            grid_size = int(resolution**self.coord_dim)
+            if not permute_on_the_fly:
+                self.unravel_indices_permute[resolution] = torch.randperm(grid_size)
+
+    def add_to_used(self, first_used: list, resolution: int) -> None:
+        """Add a list of hash indices to `self.used`. Exactly the same as MRU hash."""
+        self.used[resolution] = self.used[resolution].union(set(first_used))
+
+    def add_to_mru(self, indices: Tensor, resolution: int) -> None:
+        """Add new `indices` to MRU. Unlike MRU hash, we do not pop the tail."""
+        self.most_recently_used[resolution] = torch.cat(
+            (self.most_recently_used[resolution], indices)
+        )
+
+    def vertex_to_mru_grid_indices(
+        self, vertex_indices: Tensor, resolution: int
+    ) -> Tensor:
+        """Compute which MRU grid voxels the given vertices fall in.
+        Args:
+            vertex_indices: (bsz, 2 or 3)
+
+        Returns:
+            (bsz, num_vertex)
+        """
+        vertex_indices = (
+            vertex_indices / (resolution + 1) * self.mru_grid_resolution
+        ).long()
+        return (vertex_indices * self.mru_grid_stride).sum(-1)
+
+    def spatial_hash_raw(self, vertex_indices: Tensor) -> Tensor:
+        """Convert 2/3-dim vertex indices to 1-dim raw hash indices without modding."""
+        primes = [
+            1,
+            2654435761,
+            805459861,
+        ]
+        xor_result = torch.zeros_like(vertex_indices)[..., 0]
+        for dim in range(self.coord_dim):
+            xor_result ^= vertex_indices[..., dim] * primes[dim]
+        return xor_result
+
+    def permute_unravel_indices(
+        self, unravel_indices: Tensor, resolution: int
+    ) -> Tensor:
+        if self.permute_on_the_fly:
+            grid_size = int(resolution**self.coord_dim)
+            max_range = grid_size
+            return self.kensler_permutation_gpu(unravel_indices, max_range)
+        else:
+            return self.unravel_indices_permute[resolution][unravel_indices]
+
+    @torch.no_grad()
+    def spatial_hash(self, vertex_indices: Tensor, resolution: int) -> Tensor:
+        """Spatial hash function for the MRU grid hash scheme. This is a 'lossy' version
+        of the MRU hash scheme. As the MRU hash, we first unravel the d-dim coordinates
+        into 1-dim indices, permute them, and end up a set of overflow and non-overflow
+        indices.
+
+        For overflow indices, we treat them just as in the MRU hash scheme:
+            1. They are directly used as hash indices for the hash embeddings
+            2. For the first-used indices, we add them to `used` set and MRU queue
+
+        For the non-overflow indices:
+            1. Find the collision target:
+                a. Retrieve the MRU voxel that the corresponding vertex falls into
+                b. Query the `self.collision_base_and_bound` to get `base` and `bound`.
+                c. If base and bound is -1, it means we need to compute its collision
+                   target for the first time. Go to step 2.
+                d. Else, we retrieve the collision target by hashing it into the MRU
+                   queue as follows:
+                   i.   Raw hash the vertex to retrieve an unbounded index `i`
+                   ii.  Mod `i` by `bound` and then add `base`
+                   iii. The collision target is at the i-th index of the MRU queue.
+                e. Return the collision target.
+            2. Compute the collision target for the first time:
+                a. Get the `base` and `bound` states of the current MRU queue. Bound is
+                   `self.mru_size` and base is the length of MRU queue minus bound.
+                b. Compute the collision target as step 1d.
+                c. Store the `base` and `bound` states *for this MRU voxel* in
+                   `self.collision_base_and_bound`. Here is the 'lossy' part of this
+                   scheme: all vertices within the same MRU voxel get the same base and
+                   bound, even if some of them were first trained at a later base and
+                   bound state!
+
+        Args:
+            vertex_indices: (bsz, num_vertices, 2 or 3)
+        Returns: hash_indices (bsz, num_vertices)
+        """
+        device = vertex_indices.device
+
+        # Unravel d-dim coordinates into indices
+        stride = self.strides[resolution]  # (1, 1, 2 or 3)
+        unravel_indices = (vertex_indices * stride).sum(-1)  # (bsz, num_vertices)
+
+        # IMPORTANT: need to randomly permute the unraveled indices, so we don't bias
+        # towards colliding with leftmost column (with small unraveled indices)!
+        t_permute = time.time()
+        unravel_indices = self.permute_unravel_indices(unravel_indices, resolution)
+        t_permute -= time.time()
+
+        overflow = unravel_indices >= (
+            2**self.log2_hashtable_size
+        )  # (bsz, num_vertices)
+        overflow_size = overflow.sum()
+
+        # Add the non-overflow and first-use indices to used set and MRU queue
+        t_add = time.time()
+        if self.training and resolution in self.used.keys():
+            used = torch.tensor(
+                list(self.used[resolution]),
+                dtype=torch.long,
+                device=device,
+            )
+            non_overflow_indices = unravel_indices[~overflow]
+            first_used = non_overflow_indices[
+                torch.isin(non_overflow_indices, used, invert=True)
+            ]
+            self.add_to_mru(first_used, resolution)
+            self.add_to_used(first_used.cpu().numpy(), resolution)
+        t_add -= time.time()
+
+        hash_indices = unravel_indices  # (bsz, num_vertices)
+
+        if overflow_size > 0:
+            t_v2mru = time.time()
+            # TODO: Is it faster to store `overflow_vertex_indices` first?
+            # Get which voxel in the MRU grid each vertex falls into
+            mru_grid_indices = self.vertex_to_mru_grid_indices(
+                vertex_indices[overflow], resolution
+            )  # (num_overflow, )
+            t_v2mru -= time.time()
+
+            # Need to compute collision target for the first time
+            t_compute = time.time()
+            need_to_compute = (
+                self.collision_base_and_bound[resolution][mru_grid_indices, 0] == -1
+            )  # (num_to_compute, )
+
+            if need_to_compute.sum() > 0:
+                bound = min(self.mru_size, len(self.most_recently_used[resolution]))
+                base = len(self.most_recently_used[resolution]) - bound
+                mru_indices = (
+                    self.spatial_hash_raw(vertex_indices[overflow][need_to_compute])
+                    % bound
+                    + base
+                )
+
+                # In case we need to evaluate before any training (and so MRU is empty)
+                if self.most_recently_used[resolution].numel() == 0:
+                    assert not self.training
+                    collision_targets = torch.randint(
+                        2**self.log2_hashtable_size, mru_indices.shape, device=device
+                    )
+                else:
+                    collision_targets = self.most_recently_used[resolution][mru_indices]
+
+                # Use newly computed collision targets
+                mask = overflow.clone()  # Boolean mask
+                mask[overflow] = need_to_compute
+                hash_indices[mask] = collision_targets
+
+                # Save newly computed collision targets ONLY IN TRAIN MODE!
+                if self.training:
+                    mask = mru_grid_indices[need_to_compute]  # Index mask
+                    base_and_bound = torch.tensor(
+                        [[base, bound]], dtype=torch.long, device=device
+                    ).repeat(need_to_compute.sum(), 1)
+                    self.collision_base_and_bound[resolution][mask] = base_and_bound
+            t_compute -= time.time()
+
+            # Reuse collision targets
+            # TODO: Is it faster to do mru_grid_indices[~need_to_compute] instead?
+            t_reuse = time.time()
+            base_and_bound = self.collision_base_and_bound[resolution][
+                mru_grid_indices
+            ][~need_to_compute]
+            base = base_and_bound[:, 0]
+            bound = base_and_bound[:, 1]
+            # Compute collision targets from base and bound on-the-fly
+            mru_indices = (
+                self.spatial_hash_raw(vertex_indices[overflow][~need_to_compute])
+                % bound
+                + base
+            )
+            collision_targets = self.most_recently_used[resolution][mru_indices]
+
+            mask = overflow.clone()  # Boolean mask
+            mask[overflow] = ~need_to_compute
+            hash_indices[mask] = collision_targets
+            t_reuse -= time.time()
+
+        #     print(f"t_v2mru: {t_v2mru}")
+        #     print(f"t_compute: {t_compute}")
+        #     print(f"t_reuse: {t_reuse}")
+
+        # print(f"t_permute: {t_permute}")
+        # print(f"t_add: {t_add}")
+
+        return hash_indices
+
+    def init_feistel_permute(self):
+        """Compile CUDA implementation of Feistel cipher for on-the-fly permutation."""
+        import cupy as cp
+
+        feistel_kernel = cp.RawKernel(
+            r"""
+            __device__ unsigned int round_function(unsigned int block, unsigned int key) {
+                unsigned int hash = (block ^ key) + block * key;
+                return hash;
+            }
+
+            extern "C" __global__
+            void feistel_permutation_kernel(const unsigned int* input, unsigned int* output,
+                                            const unsigned int key1, const unsigned int key2,
+                                            int rounds, const int size, const unsigned int range) {
+                int idx = threadIdx.x + blockIdx.x * blockDim.x;
+                if (idx >= size) {
+                    return;
+                }
+
+                unsigned int value = input[idx];
+                unsigned int mask = (1 << 16) - 1;
+                unsigned int left = value >> 16;
+                unsigned int right = value & mask;
+                
+                unsigned int temp_key1 = key1;
+                unsigned int temp_key2 = key2;
+
+                for (int i = 0; i < rounds; ++i) {
+                    // Swap left and right mask
+                    unsigned int temp = left;
+                    left = right;
+                    right = temp ^ round_function(right, temp_key1) & mask;
+                    
+                    // Swap key 1 and key 2
+                    unsigned int temp_key = temp_key1;
+                    temp_key1 = temp_key2;
+                    temp_key2 = temp_key;
+
+                    if (i == rounds - 1) {
+                        // At last round
+                        unsigned int temp_result = (left << 16) | right;
+                        if (temp_result >= range) {
+                            rounds = rounds + 1;
+                        }
+                    }
+                }
+
+                output[idx] = (left << 16) | right;
+
+            }
+            """,
+            "feistel_permutation_kernel",
+        )
+
+        def feistel_permutation_gpu(
+            tensor: Tensor,
+            max_range: int,
+            key1: int = 12345,
+            key2: int = 67890,
+            rounds: int = 2,
+        ) -> Tensor:
+            input_gpu = cp.asarray(tensor, dtype=cp.uint32)
+            # input_gpu = tensor.astype(torch.uint32)
+            output_gpu = cp.empty_like(input_gpu)
+            # output_gpu = torch.empty_like(input_gpu)
+            size = input_gpu.size
+
+            threads_per_block = 256
+            blocks = (size + threads_per_block - 1) // threads_per_block
+
+            feistel_kernel(
+                (blocks,),
+                (threads_per_block,),
+                (
+                    input_gpu,
+                    output_gpu,
+                    key1,
+                    key2,
+                    rounds,
+                    size,
+                    max_range,
+                ),
+            )
+
+            return torch.as_tensor(
+                output_gpu.astype(cp.int64), device=tensor.device, dtype=torch.long
+            )
+
+        self.feistel_permutation_gpu = feistel_permutation_gpu
+
+    def init_kensler_permute(self):
+        import cupy as cp
+
+        kensler_kernel = cp.RawKernel(
+            r"""
+            extern "C" __global__
+            void kensler_permutation_kernel(const unsigned int* input, unsigned int* output,
+                                            const unsigned int key, const int size, 
+                                            const unsigned int range) {
+                int idx = threadIdx.x + blockIdx.x * blockDim.x;
+                if (idx >= size) {
+                    return;
+                }
+
+                unsigned int w = range - 1;
+                w |= w >> 1;
+                w |= w >> 2;
+                w |= w >> 4;
+                w |= w >> 8;
+                w |= w >> 16;
+
+                unsigned int i = input[idx];
+
+                do {
+                    i ^= key;
+                    i *= 0xe170893d;
+                    i ^= key >> 16;
+                    i ^= (i & w) >> 4;
+                    i ^= key >> 8;
+                    i *= 0x0929eb3f;
+                    i ^= key >> 23;
+                    i ^= (i & w) >> 1;
+                    i *= 1 | key >> 27;
+                    i *= 0x6935fa69;
+                    i ^= (i & w) >> 11;
+                    i *= 0x74dcb303;
+                    i ^= (i & w) >> 2;
+                    i *= 0x9e501cc3;
+                    i ^= (i & w) >> 2;
+                    i *= 0xc860a3df;
+                    i &= w;
+                    i ^= i >> 5;
+                } while (i >= range);
+                
+                output[idx] = (i + key) % range;
+            }
+            """,
+            "kensler_permutation_kernel",
+        )
+
+        def kensler_permutation_gpu(tensor, max_range, key=2654435761):
+            if tensor.numel() == 0:
+                return tensor
+
+            input_gpu = cp.asarray(tensor, dtype=cp.uint32)
+            output_gpu = cp.empty_like(input_gpu)
+            size = input_gpu.size
+
+            threads_per_block = 256
+            blocks = (size + threads_per_block - 1) // threads_per_block
+
+            kensler_kernel(
+                (blocks,),
+                (threads_per_block,),
+                (input_gpu, output_gpu, key, size, max_range),
+            )
+
+            return torch.as_tensor(
+                output_gpu.astype(cp.int64), device=tensor.device, dtype=torch.long
+            )
+
+        self.kensler_permutation_gpu = kensler_permutation_gpu
+
+    def to(self, device: torch.device, **kwargs):
+        self.mru_grid_stride = self.mru_grid_stride.to(device)
+
+        for resolution in self.collision_base_and_bound.keys():
+            self.most_recently_used[resolution] = self.most_recently_used[
+                resolution
+            ].to(device)
+            self.collision_base_and_bound[resolution] = self.collision_base_and_bound[
+                resolution
+            ].to(device)
+
+        if not self.permute_on_the_fly:
+            for resolution in self.unravel_indices_permute.keys():
+                self.unravel_indices_permute[resolution] = self.unravel_indices_permute[
+                    resolution
+                ].to(device)
+
+        return super().to(device, **kwargs)
+
+
 class HashNet(nn.Module):
     """Network that uses a multi-resolution hash function as coordinate embedding."""
 
@@ -448,6 +895,7 @@ class HashNet(nn.Module):
         hidden_layers: int,
         out_features: int,
         outermost_linear: bool,
+        use_tcnn: bool,
         hash_embedding: HashEmbedding,  # Recursively instantiated
         **kwargs,
     ) -> None:
@@ -461,16 +909,40 @@ class HashNet(nn.Module):
         self.net.append(self.hash_embedding)
 
         #### MLP layers ####
-        self.net.append(nn.Linear(hash_embedding_dim, hidden_features))
-        self.net.append(nn.ReLU())
-        for i in range(hidden_layers):
-            self.net.append(nn.Linear(hidden_features, hidden_features))
-            self.net.append(nn.ReLU())
-        if outermost_linear:
-            self.net.append(nn.Linear(hidden_features, out_features))
+        if use_tcnn:
+            import tinycudann as tcnn
+
+            network_config = {
+                "otype": "FullyFusedMLP",  # Component type.
+                "activation": "ReLU",  # Activation of hidden layers.
+                "output_activation": "None"
+                if outermost_linear
+                else "ReLU",  # Activation of the output layer.
+                "n_neurons": hidden_features,  # Neurons in each hidden layer.
+                # May only be 16, 32, 64, or 128.
+                "n_hidden_layers": hidden_layers,  # Number of hidden layers.
+            }
+
+            self.net.append(
+                tcnn.Network(
+                    n_input_dims=hash_embedding_dim,
+                    n_output_dims=out_features,
+                    network_config=network_config,
+                    seed=0,  # TODO: Read from config?
+                )
+            )
+
         else:
-            self.net.append(nn.Linear(hidden_features, out_features))
+            self.net.append(nn.Linear(hash_embedding_dim, hidden_features))
             self.net.append(nn.ReLU())
+            for i in range(hidden_layers):
+                self.net.append(nn.Linear(hidden_features, hidden_features))
+                self.net.append(nn.ReLU())
+            if outermost_linear:
+                self.net.append(nn.Linear(hidden_features, out_features))
+            else:
+                self.net.append(nn.Linear(hidden_features, out_features))
+                self.net.append(nn.ReLU())
 
         self.net = nn.Sequential(*self.net)
 
@@ -641,3 +1113,219 @@ class BlockHashNet(nn.Module):
             hash_net.to(device)
         self.stride = self.stride.to(device)
         return super().to(device, **kwargs)
+
+
+def main():
+    import math
+
+    import cupy as cp
+    import torch
+
+    feistel_kernel = cp.RawKernel(
+        r"""
+        __device__ unsigned int round_function(unsigned int block, unsigned int key) {
+            unsigned int hash = (block ^ key) + block * key;
+            return hash;
+        }
+
+        extern "C" __global__
+        void feistel_permutation_kernel(const unsigned int* input, unsigned int* output,
+                                        const unsigned int key1, const unsigned int key2,
+                                        const int rounds, const int size, const int range_power) {
+            int idx = threadIdx.x + blockIdx.x * blockDim.x;
+            if (idx >= size) {
+                return;
+            }
+
+            unsigned int value = input[idx];
+            unsigned int half_range_power = range_power / 2;
+            unsigned int right_mask = (1 << half_range_power) - 1;
+            unsigned int left_mask = (1 << (range_power - half_range_power)) - 1;
+            
+            unsigned int right = value & right_mask;
+            unsigned int left = (value >> half_range_power);
+            
+            unsigned int temp_key1 = key1;
+            unsigned int temp_key2 = key2;
+
+            for (int i = 0; i < rounds; ++i) {
+                // Swap left and right mask
+                unsigned int temp_mask = left_mask;
+                left_mask = right_mask;
+                right_mask = temp_mask;
+
+                // Swap left with right
+                unsigned int temp = left;
+                left = right & left_mask;
+
+                // Compute right with round function and old left
+                right = temp ^ round_function(right, temp_key1);
+                right = right & right_mask;
+                
+                // Swap key 1 and key 2
+                unsigned int temp_key = temp_key1;
+                temp_key1 = temp_key2;
+                temp_key2 = temp_key;
+            }
+
+            // NOTE: This only works if rounds is even or range_power is even
+            output[idx] = (left << half_range_power) | right;
+        }
+        """,
+        "feistel_permutation_kernel",
+    )
+
+    log2_range = 4
+
+    def feistel_permutation_gpu(tensor, key1, key2, rounds=2):
+        input_gpu = cp.asarray(tensor, dtype=cp.uint32)
+        # input_gpu = tensor
+        output_gpu = cp.empty_like(input_gpu)
+        # output_gpu = torch.empty_like(input_gpu)
+        size = input_gpu.size
+        # size = input_gpu.numel()
+
+        threads_per_block = 256
+        blocks = (size + threads_per_block - 1) // threads_per_block
+
+        feistel_kernel(
+            (blocks,),
+            (threads_per_block,),
+            (input_gpu, output_gpu, key1, key2, rounds, size, log2_range),
+        )
+
+        return torch.tensor(output_gpu.get().astype(np.int32), dtype=torch.int32).cuda()
+
+    # Example usage
+    key1 = 12345
+    key2 = 67890
+    rounds = 2
+    tensor = torch.randint(0, 2**3, (10,), dtype=torch.int32).cuda()
+
+    print(f"Input tensor: {tensor}")
+
+    permuted_tensor = feistel_permutation_gpu(tensor, key1, key2, rounds)
+    print("Permuted tensor:\n", permuted_tensor)
+
+    # # To reverse the permutation, just call the function again
+    # original_tensor = feistel_permutation_gpu(
+    #     permuted_tensor.to(dtype=torch.int32), key1, key2, rounds
+    # )
+    # print("Original tensor:\n", original_tensor)
+
+
+def main2():
+    import hashlib
+
+    def deterministic_permutation_map(x):
+        # Convert x to bytes and hash it using SHA-256
+        hashed = hashlib.sha256(str(x).encode()).digest()
+
+        # Convert the hashed bytes to an integer using the first 4 bytes
+        # of the hash (32 bits)
+        hashed_int = int.from_bytes(hashed[:4], byteorder="big")
+
+        # Map the hashed integer to the desired range using modular arithmetic
+        # Note that the range [0, 123456] has 123457 elements
+        return hashed_int % 123457
+
+    # Test the function
+    x = torch.arange(123457)
+    import ipdb
+
+    ipdb.set_trace()
+
+    y = deterministic_permutation_map(x)
+    print(y)  # tensor([27545, 43510, 70114,  ..., 85238, 49560, 43127])
+
+
+def main3():
+    import cupy as cp
+    import torch
+
+    kensler_kernel = cp.RawKernel(
+        r"""
+        extern "C" __global__
+        void kensler_permutation_kernel(const unsigned int* input, unsigned int* output,
+                                        const unsigned int key, const int size, 
+                                        const unsigned int range) {
+            int idx = threadIdx.x + blockIdx.x * blockDim.x;
+            if (idx >= size) {
+                return;
+            }
+
+            unsigned int w = range - 1;
+            w |= w >> 1;
+            w |= w >> 2;
+            w |= w >> 4;
+            w |= w >> 8;
+            w |= w >> 16;
+
+            unsigned int i = input[idx];
+
+            do {
+                i ^= key;
+                i *= 0xe170893d;
+                i ^= key >> 16;
+                i ^= (i & w) >> 4;
+                i ^= key >> 8;
+                i *= 0x0929eb3f;
+                i ^= key >> 23;
+                i ^= (i & w) >> 1;
+                i *= 1 | key >> 27;
+                i *= 0x6935fa69;
+                i ^= (i & w) >> 11;
+                i *= 0x74dcb303;
+                i ^= (i & w) >> 2;
+                i *= 0x9e501cc3;
+                i ^= (i & w) >> 2;
+                i *= 0xc860a3df;
+                i &= w;
+                i ^= i >> 5;
+            } while (i >= range);
+            
+            // return (i + key) % l;
+            output[idx] = (i + key) % range;
+        }
+        """,
+        "kensler_permutation_kernel",
+    )
+
+    max_range = 256
+
+    def kensler_permutation_gpu(tensor, key1):
+        input_gpu = cp.asarray(tensor, dtype=cp.uint32)
+        output_gpu = cp.empty_like(input_gpu)
+        size = input_gpu.size
+
+        threads_per_block = 256
+        blocks = (size + threads_per_block - 1) // threads_per_block
+
+        kensler_kernel(
+            (blocks,),
+            (threads_per_block,),
+            (input_gpu, output_gpu, key1, size, max_range),
+        )
+
+        return torch.as_tensor(
+            output_gpu.astype(cp.int32), device=tensor.device, dtype=torch.long
+        )
+
+    # Example usage
+    key = 12345
+    tensor = torch.randint(0, 2**3, (10,), dtype=torch.int32).cuda()
+
+    print(f"Input tensor: {tensor}")
+
+    permuted_tensor = kensler_permutation_gpu(tensor, key)
+    print("Permuted tensor:\n", permuted_tensor)
+
+    # # To reverse the permutation, just call the function again
+    # original_tensor = feistel_permutation_gpu(
+    #     permuted_tensor.to(dtype=torch.int32), key1, key2, rounds
+    # )
+    # print("Original tensor:\n", original_tensor)
+
+
+if __name__ == "__main__":
+    main3()

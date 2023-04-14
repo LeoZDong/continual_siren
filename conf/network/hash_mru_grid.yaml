@@ -1,0 +1,10 @@
+name: "hash_mru"
+
+defaults:
+  - hash_mru
+
+hash_embedding:
+  _target_: "networks.hash_networks.HashEmbeddingMRUGrid"
+  mru_size: 1000
+  mru_grid_resolution: 1024
+  permute_on_the_fly: true
