@@ -22,7 +22,7 @@ def render_rays_test(
     bitfield_cascades,
     bitfield_scale,
     bitfield_grid_size,
-    max_samples=MAX_SAMPLES,
+    max_samples,
     **kwargs,
 ):
     """
@@ -52,7 +52,7 @@ def render_rays_test(
     # otherwise, 4 is more efficient empirically
     min_samples = 1 if exp_step_factor == 0 else 4
 
-    while samples < kwargs.get("max_samples", MAX_SAMPLES):
+    while samples < max_samples:
         N_alive = len(alive_indices)
         if N_alive == 0:
             break

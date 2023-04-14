@@ -1,5 +1,5 @@
-_target_: data.region_simulators.NeRFRegionSimulator
+_target_: data.region_simulators.RegularNeRFRegionSimulator
 
-num_images_per_region: 1
-img_h: 800
-img_w: 800
+divide_side_n: 2
+aabb_min: -1
+aabb_max: 1

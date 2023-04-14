@@ -3,7 +3,14 @@ defaults:
 
 _target_: "trainers.simple_trainer_nerf.SimpleTrainerNerf"
 
-max_batch: 4096
+total_steps: 10000
 gpu_if_available: true
+switch_region_every_steps: 2500
+
+eval_every_steps: 1250
+summary_every_steps: 200
+checkpoint_every_steps: 0
+
+max_batch: 2048
 update_density_bitfield_every_steps: 16
 warmup_steps: 256

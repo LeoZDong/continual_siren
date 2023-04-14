@@ -273,3 +273,33 @@ class RegularNeRFRegionSimulator(RegionSimulator):
                 output_regions.append(output)
 
         return input_regions, output_regions
+
+    def get_region_idx(self, ray_o: Tensor) -> int:
+        """Return the region that a ray would belong to. Used in ad-hoc pre-region eval
+        of test frames.
+        Args:
+            ray_o: (3,) Origin of one ray.
+        """
+        # Gather frames for each region
+        side_len = self.aabb_max - self.aabb_min
+        for i in range(self.divide_side_n):
+            for j in range(self.divide_side_n):
+                x_bound = [
+                    self.aabb_min + i * side_len / self.divide_side_n,
+                    self.aabb_min + (i + 1) * side_len / self.divide_side_n,
+                ]
+                y_bound = [
+                    self.aabb_min + j * side_len / self.divide_side_n,
+                    self.aabb_min + (j + 1) * side_len / self.divide_side_n,
+                ]
+
+                x, y = ray_o[:2].cpu().numpy()
+                if (
+                    x >= x_bound[0]
+                    and x <= x_bound[1]
+                    and y >= y_bound[0]
+                    and y <= y_bound[1]
+                ):
+                    return i + j * self.divide_side_n
+
+        raise RuntimeError

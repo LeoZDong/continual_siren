@@ -8,5 +8,5 @@ path: "datasets/nerf_synthetic/lego"
 split: ["train", "val"]
 img_w: 800
 img_h: 800
-downsample: 0.1
+downsample: 1.0
 use_test_split_for_video: true

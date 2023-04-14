@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, Iterable, List, Optional, Tuple, Union
 
 import cv2
 import hydra
@@ -140,7 +140,7 @@ class NeRFSyntheticDataset(Dataset):
         # TODO: These do not need to be instance variables
         self.K, self.directions = self.read_intrinsics()
 
-        if isinstance(split, List):
+        if isinstance(split, Iterable):
             self.rays_o = []
             self.rays_d = []
             self.pixels = []

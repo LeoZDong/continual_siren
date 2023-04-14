@@ -85,14 +85,6 @@ class SimpleTrainer:
         self.dataloader_iter = iter(self.dataloader)
 
     def train(self) -> None:
-        # Prepare data:
-        # Only used in continual setting: return all points in the current region.
-        # Each "batch" is all points in the current region.
-        # model_input, ground_truth = self.dataset.input, self.dataset.output
-        # model_input, ground_truth = move_to(model_input, self.device), move_to(
-        #     ground_truth, self.device
-        # )
-
         progress_bar = tqdm(total=self.total_steps)
         while self.step < self.total_steps:
             model_input, ground_truth = self.get_next_step_data()
@@ -197,7 +189,7 @@ class SimpleTrainer:
     def get_next_step_data(self) -> Tuple[Tensor, Tensor]:
         """Get data for the next training step.
         In the continual case, data for the next step does not change unless we need
-            to switch to a differen region (unless batched).
+            to switch to a differen region (or data in a region has multiple batches).
         In the non-continual case, data for the next step is the next batch of randomly
             sampled points in the full grid.
         """
@@ -244,11 +236,12 @@ class SimpleTrainer:
     def maybe_eval_and_log(self) -> None:
         """Evaluate and log evaluation summary if appropriate."""
         if self.step % self.cfg.trainer.eval_every_steps == 0:
-            # Evaluate on the entire image
+            ## Full region ##
+            # Evaluate on the full image
             eval_mse_full, full_img_out, full_gt_img = self.eval(
                 eval_coords="full", output_img=True
             )
-            # Log evaluation loss for the full image
+            # Log evaluation loss for the full image to tensorboard
             psnr_full = mse2psnr(eval_mse_full)
             self._tb_writer.add_scalar(
                 tag="eval/psnr_on_full_img",
@@ -256,6 +249,19 @@ class SimpleTrainer:
                 global_step=self.step,
             )
 
+            # Record model output full image
+            self._tb_writer.add_image(
+                "full/eval_out_full", full_img_out, global_step=self.step
+            )
+            if self.step == self.cfg.trainer.eval_every_steps:
+                self._tb_writer.add_image(
+                    "full/gt_full", full_gt_img, global_step=self.step
+                )
+
+            # Log eval stats to file
+            log.info(f"step={self.step}, eval_psnr_full={round(psnr_full, 5)}")
+
+            ## Individual regions ##
             # Evaluate on each region individually
             regions = np.arange(self.dataset.num_regions)
             eval_mse_backward = []
@@ -282,18 +288,7 @@ class SimpleTrainer:
                     global_step=self.step,
                 )
 
-            # Record model output image on the full coordinate
-            self._tb_writer.add_image(
-                "full/eval_out_full", full_img_out, global_step=self.step
-            )
-            if self.step == self.cfg.trainer.eval_every_steps:
-                self._tb_writer.add_image(
-                    "full/gt_full", full_gt_img, global_step=self.step
-                )
-
-            # Print eval stats
-            log.info(f"step={self.step}, eval_psnr_full={round(psnr_full, 5)}")
-
+        ## Final records ##
         if self.is_final_step(self.step):
             eval_mse_full, full_img_out, full_gt_img = self.eval(
                 eval_coords="full", output_img=True

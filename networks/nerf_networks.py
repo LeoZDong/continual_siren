@@ -32,6 +32,7 @@ class NeRFNetwork(nn.Module):
         color_hidden_layers: int,
         color_out_features: int,
         color_out_activation: nn.Module,  # Recursively instantiated
+        use_tcnn: bool,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
@@ -45,17 +46,36 @@ class NeRFNetwork(nn.Module):
 
         #### Color network is a simple MLP ####
         color_in_features = direction_encoder.out_dim + density_net.out_dim
-        self.color_net = []
-        self.color_net.append(nn.Linear(color_in_features, color_hidden_features))
-        self.color_net.append(nn.ReLU())
-        for i in range(color_hidden_layers):
-            self.color_net.append(
-                nn.Linear(color_hidden_features, color_hidden_features)
+        if use_tcnn:
+            import tinycudann as tcnn
+
+            network_config = {
+                "otype": "FullyFusedMLP",  # Component type.
+                "activation": "ReLU",  # Activation of hidden layers.
+                "output_activation": color_out_activation.__class__.__name__,
+                "n_neurons": color_hidden_features,  # Neurons in each hidden layer.
+                # May only be 16, 32, 64, or 128.
+                "n_hidden_layers": color_hidden_layers,  # Number of hidden layers.
+            }
+
+            self.color_net = tcnn.Network(
+                n_input_dims=color_in_features,
+                n_output_dims=color_out_features,
+                network_config=network_config,
+                seed=0,  # TODO: Read from config?
             )
+        else:
+            self.color_net = []
+            self.color_net.append(nn.Linear(color_in_features, color_hidden_features))
             self.color_net.append(nn.ReLU())
-        self.color_net.append(nn.Linear(color_hidden_features, color_out_features))
-        self.color_net.append(color_out_activation)
-        self.color_net = nn.Sequential(*self.color_net)
+            for i in range(color_hidden_layers):
+                self.color_net.append(
+                    nn.Linear(color_hidden_features, color_hidden_features)
+                )
+                self.color_net.append(nn.ReLU())
+            self.color_net.append(nn.Linear(color_hidden_features, color_out_features))
+            self.color_net.append(color_out_activation)
+            self.color_net = nn.Sequential(*self.color_net)
 
         # Register as module list
         # TODO: Does this work? Is this necessary?
@@ -302,15 +322,14 @@ class NeRFRenderer(nn.Module):
         self,
         rays_o: Tensor,
         rays_d: Tensor,
+        use_test_render: bool = False,
         **kwargs,
     ):
         """Render a batch of rays using accelerated and optimized ray marching. Entirely
         implemented in CUDA and can only be called when device is cuda.
+        Args:
+            use_test_render: Whether to use higher quality but slower test render func.
         """
-        # FIXME: For some reason, using optimized algorithm leads to some memory leakage (?)
-        # where I get oom at around step 350 (also does not happen when I don't update bitfield).
-        torch.cuda.empty_cache()
-
         rays_o = rays_o.contiguous()
         rays_d = rays_d.contiguous()
         center = (
@@ -325,12 +344,10 @@ class NeRFRenderer(nn.Module):
             (hits_t[:, 0, 0] >= 0) & (hits_t[:, 0, 0] < self.min_near), 0, 0
         ] = self.min_near
 
-        if self.training:
-            render_func = render_rays_train
-        else:
+        if use_test_render:
             render_func = render_rays_test
-            # NOTE: test rendering is significantly slower for some reason? Use train rendering for now???
-            # render_func = render_rays_train
+        else:
+            render_func = render_rays_train
 
         results = render_func(
             self.nerf_network,
@@ -355,7 +372,12 @@ class NeRFRenderer(nn.Module):
         return results["rgb"], results["depth"]
 
     def render(
-        self, rays_o, rays_d, max_ray_batch: int = 1024, **kwargs
+        self,
+        rays_o,
+        rays_d,
+        max_ray_batch: int = 1024,
+        return_cpu: bool = False,
+        **kwargs,
     ) -> Tuple[Tensor, Tensor]:
         """Render rays. Stage the rendering into batches if too many rays.
         Args:
@@ -368,7 +390,7 @@ class NeRFRenderer(nn.Module):
             depth: (num_rays, ) Rendered depth for each ray.
         """
         num_rays = rays_o.shape[0]
-        device = rays_o.device
+        device = rays_o.device if not return_cpu else torch.device("cpu")
 
         _render = (
             self._render_optimized_march_cuda
@@ -389,8 +411,12 @@ class NeRFRenderer(nn.Module):
                     perturb=True,
                     **kwargs,
                 )
-                image[i : min(i + max_ray_batch, num_rays)] = image_batch
-                depth[i : min(i + max_ray_batch, num_rays)] = depth_batch
+                if return_cpu:
+                    image[i : min(i + max_ray_batch, num_rays)] = image_batch.cpu()
+                    depth[i : min(i + max_ray_batch, num_rays)] = depth_batch.cpu()
+                else:
+                    image[i : min(i + max_ray_batch, num_rays)] = image_batch
+                    depth[i : min(i + max_ray_batch, num_rays)] = depth_batch
                 i += max_ray_batch
 
             return image, depth

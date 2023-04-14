@@ -9,6 +9,7 @@ out_features: 3
 hidden_features: 64
 hidden_layers: 2
 outermost_linear: true
+use_tcnn: false
 
 hash_embedding:
   _target_: "networks.hash_networks.HashEmbedding"
