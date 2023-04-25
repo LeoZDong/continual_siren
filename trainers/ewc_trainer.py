@@ -32,20 +32,24 @@ class EWCTrainer(RegularizeTrainer):
 
         return reg_loss
 
-    def maybe_switch_region(
-        self, model_input: Tensor, ground_truth: Tensor
-    ) -> Tuple[Tensor, Tensor]:
-        # FIXME: This will break with the newest trainer format
-        if self.need_to_switch_region:
-            # Set importance and reference model when we are about to switch to the
-            # next region. At this point, `model_input` and `ground_truth` still
-            # correspond to the **old** region.
+    def get_next_step_data(self) -> Tuple[Tensor, Tensor]:
+        """Overwrite super class method to set importance and reference model when we
+        are about to switch to a new region.
+        """
+        if self.continual and self.need_to_switch_region:
+            # We are about to switch to the next region. Use **old** region's data to
+            # set importance and reference model.
+            try:
+                model_input, ground_truth = next(self.dataloader_iter)
+            except StopIteration:
+                self.dataloader_iter = iter(self.dataloader)
+                model_input, ground_truth = next(self.dataloader_iter)
             self.calculate_and_set_importance(
                 model_input=model_input, ground_truth=ground_truth
             )
             self.set_current_model_as_ref()
 
-        return super().maybe_switch_region(model_input, ground_truth)
+        return super().get_next_step_data()
 
     def calculate_and_set_importance(
         self, model_input: Tensor, ground_truth: Tensor
@@ -58,7 +62,7 @@ class EWCTrainer(RegularizeTrainer):
             model_input: Input coordinates of the previous region.
             ground_truth: Pixel values of the previous region.
         """
-        model_output = self.network(model_input)[0]
+        model_output = self.network(**model_input)
 
         loss = self.loss(model_output, ground_truth, regularize=False)
         self.network.zero_grad()
