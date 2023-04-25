@@ -1,0 +1,12 @@
+defaults:
+  - region_simulator: single_image_nerf_region_simulator
+
+_target_: "data.nerf_data.NeRFSyntheticDataset"
+_recursive_: true
+
+path: "datasets/nerf_synthetic/lego_sparse"
+split: ["train"]
+img_w: 800
+img_h: 800
+downsample: 1.0
+use_test_split_for_video: true

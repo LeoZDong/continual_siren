@@ -303,3 +303,24 @@ class RegularNeRFRegionSimulator(RegionSimulator):
                     return i + j * self.divide_side_n
 
         raise RuntimeError
+
+
+class SingleImageNeRFRegionSimulator(RegionSimulator):
+    def simulate_regions(
+        self, full_input: Dict[str, Tensor], full_output: Tensor
+    ) -> Tuple[List[Dict[str, Tensor]], List[Tensor]]:
+        """Simulate regions for NeRF training. One region contains all rays in one image."""
+        input_regions = []
+        output_regions = []
+
+        num_frames = full_input["rays_o"].shape[0]
+        for frame_idx in range(num_frames):
+            input = {
+                "rays_o": full_input["rays_o"][frame_idx],
+                "rays_d": full_input["rays_d"][frame_idx],
+            }
+            output = full_output[frame_idx]
+            input_regions.append(input)
+            output_regions.append(output)
+
+        return input_regions, output_regions

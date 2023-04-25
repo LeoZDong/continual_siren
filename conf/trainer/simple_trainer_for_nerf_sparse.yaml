@@ -1,0 +1,16 @@
+defaults:
+  - simple_trainer_for_hash
+
+_target_: "trainers.simple_trainer_nerf.SimpleTrainerNerf"
+
+total_steps: 1000
+gpu_if_available: true
+switch_region_every_steps: 250
+
+eval_every_steps: 125
+summary_every_steps: 20
+checkpoint_every_steps: 0
+
+max_batch: 1024
+update_density_bitfield_every_steps: 8
+warmup_steps: 100

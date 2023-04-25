@@ -1,0 +1,10 @@
+defaults:
+  - simple_trainer_for_nerf_sparse
+
+_target_: "trainers.nerf_freeze_trainer.NeRFFreezeTrainer"
+_recursive_: false
+
+load_ckpt_path: null
+freeze_hash: false
+freeze_mlp: true
+freeze_at: end_of_region0
