@@ -4,6 +4,7 @@ from omegaconf import DictConfig
 from torch import Tensor
 
 from trainers.regularize_trainer import RegularizeTrainer
+from utils import move_to
 
 
 class EWCTrainer(RegularizeTrainer):
@@ -44,6 +45,10 @@ class EWCTrainer(RegularizeTrainer):
             except StopIteration:
                 self.dataloader_iter = iter(self.dataloader)
                 model_input, ground_truth = next(self.dataloader_iter)
+
+            model_input, ground_truth = move_to(model_input, self.device), move_to(
+                ground_truth, self.device
+            )
             self.calculate_and_set_importance(
                 model_input=model_input, ground_truth=ground_truth
             )
