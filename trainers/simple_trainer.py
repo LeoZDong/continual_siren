@@ -42,7 +42,6 @@ class SimpleTrainer:
             self.device = torch.device("mps")
         else:
             self.device = torch.device("cpu")
-        self.network.to(self.device)
 
         # TODO: Formally compare if fused adam gives any speed improvement
         self.optimizer = instantiate(
@@ -67,9 +66,29 @@ class SimpleTrainer:
         if self.cfg.trainer.load_ckpt_path is not None:
             path = os.path.join(get_original_cwd(), self.cfg.trainer.load_ckpt_path)
             ckpt = torch.load(path)
-            self.network.load_state_dict(ckpt["model_state_dict"])
+            try:
+                self.network.load_state_dict(ckpt["model_state_dict"])
+            except:
+                # Skip size mismatched parameters!
+                network_state_dict = self.network.state_dict()
+
+                for name, param in ckpt.items():
+                    # Check if the name exists in the network_state_dict and the shapes match
+                    if (
+                        name in network_state_dict
+                        and param.shape == network_state_dict[name].shape
+                    ):
+                        # Update the corresponding parameters in the network_state_dict
+                        network_state_dict[name] = param
+
+                # Load the updated state_dict into model
+                self.network.load_state_dict(network_state_dict)
+
             self.optimizer.load_state_dict(ckpt["optimizer_state_dict"])
             # Note that we still keep self.step at 0 and do not load it
+
+        # In case of large models, move model to GPU *after* loading ckpt saves memory
+        self.network.to(self.device)
 
         # Only used in non-continual setting: randomly sample points from the full grid
         # Each "batch" has the same number of points as *one* region in the continual case.
@@ -89,7 +108,13 @@ class SimpleTrainer:
         while self.step < self.total_steps:
             model_input, ground_truth = self.get_next_step_data()
 
-            model_output = self.network(**model_input)
+            ## Probe ##
+            # model_output = self.network(**model_input, probe=True)
+            # loss = self.loss(model_output, ground_truth)
+            # loss.backward()
+
+            ## Optimize ##
+            model_output = self.network(**model_input, probe=False)
             loss = self.loss(model_output, ground_truth)
             self.maybe_log(loss)
 
@@ -207,13 +232,7 @@ class SimpleTrainer:
         return move_to(model_input, self.device), move_to(ground_truth, self.device)
 
     def maybe_switch_region(self) -> None:
-        """Switch to new region for training if appropriate.
-        Args:
-            model_input, ground_truth: Current feature-label pair.
-        Returns:
-            If time to switch, return the new feature-label pair. Else, return the
-                current feature-label pair.
-        """
+        """Switch to new region for training if appropriate. Changes dataset state."""
         if self.need_to_switch_region:
             new_region = (self.dataset.cur_region + 1) % self.dataset.num_regions
             log.info(
@@ -235,7 +254,8 @@ class SimpleTrainer:
 
     def maybe_eval_and_log(self) -> None:
         """Evaluate and log evaluation summary if appropriate."""
-        if self.step % self.cfg.trainer.eval_every_steps == 0:
+        # NOTE: It is nice to eval at step 1 for plotting, but not needed for experiments
+        if self.step == 1 or (self.step % self.cfg.trainer.eval_every_steps == 0):
             ## Full region ##
             # Evaluate on the full image
             eval_mse_full, full_img_out, full_gt_img = self.eval(
