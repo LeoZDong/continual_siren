@@ -3,6 +3,7 @@ import logging
 from omegaconf import DictConfig
 
 from trainers.ewc_trainer import EWCTrainer
+from trainers.hash_freeze_trainer import HashFreezeTrainer
 
 log = logging.getLogger(__name__)
 
@@ -36,3 +37,7 @@ class HashEWCTrainer(EWCTrainer):
         else:
             # Set the current model as *the* reference model.
             self.reference_model = cur_model
+
+
+class HashEWCFreezeTrainer(HashEWCTrainer, HashFreezeTrainer):
+    pass

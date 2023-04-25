@@ -1,0 +1,7 @@
+defaults:
+  - hash_freeze_trainer
+
+_target_: "trainers.hash_ewc_trainer.HashEWCFreezeTrainer"
+
+reg_coef: 1e9
+reg_exclude_param_names: ["net"]
